@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>copilot-multi</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">copilot<span>-multi</span></div>
+    <nav class="tabs" id="tabs"></nav>
+    <div class="actions">
+      <button id="new-session" title="New session (⌘T)">+ new</button>
+    </div>
+  </header>
+  <main id="panes"></main>
+  <footer class="status">
+    <span id="conn-state">connecting…</span>
+    <span class="spacer"></span>
+    <span id="hint">⌘T new · ⌘W close · ⌘1..9 switch · ⌘R raw mode</span>
+  </footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+export const PROTOCOL_VERSION = 1;
+
+export type SessionStatus = 'spawning' | 'idle' | 'working' | 'needs-input' | 'error' | 'exited';
+
+export interface SessionMeta {
+  id: string;
+  copilotSessionId?: string | null;
+  cwd: string;
+  cmd: string[];
+  status: SessionStatus;
+  createdAt: number;
+  updatedAt: number;
+  title?: string | null;
+}
+
+export type ServerMsg =
+  | { t: 'hello'; protocolVersion: number }
+  | { t: 'session.list'; sessions: SessionMeta[] }
+  | { t: 'session.created'; session: SessionMeta }
+  | { t: 'session.status'; id: string; status: SessionStatus }
+  | { t: 'pty.data'; id: string; data: string }
+  | { t: 'pty.exit'; id: string; code: number | null; signal: string | null }
+  | { t: 'error'; id?: string; message: string };
+
+export type ClientMsg =
+  | { t: 'session.new'; cwd?: string; cmd?: string[] }
+  | { t: 'session.attach'; id: string }
+  | { t: 'session.close'; id: string }
+  | { t: 'pty.input'; id: string; data: string }
+  | { t: 'pty.resize'; id: string; cols: number; rows: number };
