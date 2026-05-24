@@ -37,7 +37,11 @@ function note(freq: number, startAt: number, durSec: number, gain = 0.18, type: 
 }
 
 let lastPlayedAt = 0;
-const MIN_GAP_MS = 250;
+// Per-page-load guard against literal-overlap; the real "one alert per event"
+// dedup happens upstream in the debouncer in app.ts. This just keeps two
+// chimes from playing simultaneously if two different sessions happen to
+// settle in the same animation frame.
+const MIN_GAP_MS = 100;
 
 export function playChime(kind: ChimeKind): void {
   // Throttle so a burst of events doesn't spam audio.

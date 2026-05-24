@@ -4,6 +4,7 @@ import type { ClientMsg, ServerMsg, SessionMeta, SessionStatus } from '../shared
 import { playChime, unlockAudio } from './chimes.js';
 import { ensurePermission, notify } from './notify.js';
 import { colorForRepo } from './repoColors.js';
+import { AlertDispatcher } from './alertDispatcher.js';
 import {
   BIN_PTY_DATA,
   BIN_PTY_INPUT,
@@ -474,6 +475,9 @@ const poppedOutSessions = new Set<string>();
 
 function popOutSession(id: string): void {
   poppedOutSessions.add(id);
+  // Cancel any in-flight alert so we don't get a stale chime/notify right
+  // after popping out — the popout window owns alerts for this session now.
+  alertDispatcher.cancel(id);
   const url = `/?pop=${encodeURIComponent(id)}`;
   window.open(url, `minionhq-${id}`, 'width=920,height=720,resizable=yes');
 }
@@ -592,28 +596,30 @@ function updateStatus(id: string, status: SessionStatus) {
     t.loadingEl.dataset.hidden = '1';
   }
 
-  // Chime + notify only on meaningful status transitions.
-  // - Chime ALWAYS fires (even when the tab is focused) — the user wants the
-  //   audible "agent finished" / "needs input" cue regardless of which tab
-  //   they're staring at.
-  // - OS notification still fires on focused-tab so users on the empty/list
-  //   page get a toast; we trust the macOS Notification Center to coalesce.
-  // - Sessions popped out from THIS window are silenced here — the popout
-  //   window will handle their chimes/toasts so the user doesn't get
-  //   duplicate alerts from two windows on the same session.
   if (prev === status) return;
+  // Sessions popped out from this window get silenced here — the popout
+  // owns chimes/notifications for that session to avoid double-alerting.
   if (poppedOutSessions.has(id)) return;
 
-  let kind: 'needs-input' | 'agent-finished' | 'error' | null = null;
-  if (status === 'needs-input' && prev !== 'needs-input') kind = 'needs-input';
-  else if (status === 'error' && prev !== 'error') kind = 'error';
-  else if (status === 'idle' && (prev === 'working' || prev === 'spawning')) kind = 'agent-finished';
+  // Hand the transition to the dispatcher. It will coalesce rapid bursts
+  // (e.g. working → idle → needs-input within 150ms) into ONE alert of the
+  // highest-priority kind, and will NOT fire on spawning → idle.
+  alertDispatcher.onTransition(id, prev, status);
+}
 
-  if (kind) {
+// Singleton alert dispatcher. The `fire` callback is the ONLY place chimes
+// and OS notifications are triggered for status events — keeping that funnel
+// narrow ensures we can never accidentally fire two chimes for one event.
+const alertDispatcher = new AlertDispatcher({
+  windowMs: 500,
+  fire(id, kind) {
+    const t = tabs.get(id);
+    if (!t) return;
+    if (poppedOutSessions.has(id)) return;
     if (chimesEnabled) playChime(kind);
     if (notifyEnabled) notify(kind, labelFor(t.meta));
-  }
-}
+  },
+});
 
 function newSession(opts?: { cwd?: string; repoPath?: string; branchName?: string }) {
   sendMsg({ t: 'session.new', ...opts });

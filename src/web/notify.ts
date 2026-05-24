@@ -40,8 +40,9 @@ function browserTitle(kind: NotifyKind, sessionTitle?: string | null): string {
 function browserNotify(kind: NotifyKind, sessionTitle?: string | null, body?: string): void {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
-  // Only notify if the document isn't already in foreground
-  if (document.visibilityState === 'visible' && document.hasFocus()) return;
+  // No visibility/focus gate: the user may have walked away from a focused
+  // window — OS-level toasts should always fire so they can hear/see them
+  // from across the room or on another desktop.
   try {
     const n = new Notification(browserTitle(kind, sessionTitle), {
       body: body ?? '',
@@ -77,10 +78,11 @@ async function macNotify(kind: NotifyKind, sessionTitle?: string | null, body?: 
  * osascript/terminal-notifier) and falls back to the browser Notification API
  * on other platforms.
  *
- * Only suppress when the document is foreground — same rule for both paths.
+ * No focus/visibility gate — the user explicitly wants OS notifications even
+ * when they're staring at the window (they might walk away mid-turn and need
+ * to know when the agent finishes from across the room).
  */
 export function notify(kind: NotifyKind, sessionTitle?: string | null, body?: string): void {
-  if (document.visibilityState === 'visible' && document.hasFocus()) return;
   void (async () => {
     const mac = await checkMacSupport();
     if (mac) {

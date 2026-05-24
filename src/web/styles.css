@@ -165,7 +165,10 @@ body.drawer-open {
               0 0 0 1px color-mix(in srgb, var(--repo-color) 65%, transparent);
 }
 .tab.active::before {
-  background: color-mix(in srgb, var(--repo-color) 32%, transparent);
+  /* NOTE: must NOT use the `background` shorthand here — that resets
+     background-image to none and erases the numbered-minion SVG. Use
+     `background-color` so the SVG (set on .tab::before) keeps rendering. */
+  background-color: color-mix(in srgb, var(--repo-color) 32%, transparent);
   border-color: var(--repo-color);
 }
 .tab .label {

@@ -21,6 +21,24 @@ test('classify: needs-input on y/n prompt', () => {
   assert.equal(classify(b('Do you want to apply these changes?'), 'idle'), 'needs-input');
 });
 
+test('classify: needs-input on Copilot CLI Ink-style prompts', () => {
+  // Leading "? " glyph as Ink renders confirmation widgets.
+  assert.equal(classify(b('? Run this command?'), 'working'), 'needs-input');
+  // Arrow-key chooser items.
+  assert.equal(classify(b('❯ Yes\n  No'), 'working'), 'needs-input');
+  assert.equal(classify(b('› No\n  Yes'), 'working'), 'needs-input');
+  assert.equal(classify(b('> Yes\n  No'), 'working'), 'needs-input');
+  // Hint copy under interactive lists.
+  assert.equal(classify(b('Select an option (use arrow keys)'), 'working'), 'needs-input');
+});
+
+test('classify: needs-input on bare question-ending chunk', () => {
+  // Last-resort: the chunk ends with a question — the agent stopped writing
+  // having just asked something. Distinct from mid-stream "?" chatter.
+  assert.equal(classify(b('Would you like me to do X?\n'), 'working'), 'needs-input');
+  assert.equal(classify(b('Should I rename it?'), 'working'), 'needs-input');
+});
+
 test('classify: idle on bare prompt arrow (agent finished a turn)', () => {
   // A bare ">"/"❯" prompt means the agent is ready for the next message —
   // that's "idle" / agent-finished, not "needs-input". (See classifier
