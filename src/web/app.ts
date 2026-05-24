@@ -10,7 +10,6 @@ import {
   uuidToBytes,
   bytesToUuid,
 } from '../shared/binProtocol.js';
-import { parseIntent, type RepoCandidate } from './nlParse.js';
 
 interface TabState {
   meta: SessionMeta;
@@ -303,16 +302,11 @@ function openNewSessionModal(): void {
   const lastRepo = lsGet(LS_KEYS.lastRepo) ?? '';
   const lastBase = lsGet(LS_KEYS.lastReposBase) ?? '';
   overlay.innerHTML = `
-    <div class="modal modal-wide">
+    <div class="modal">
       <h2>new copilot session</h2>
       <label>
-        <span>describe what you want to do <em>(natural language — fills the fields below)</em></span>
-        <textarea id="cm-nl" rows="2" placeholder="e.g. make me a new branch in fde intake automation for us to do some data viz" autofocus></textarea>
-        <span class="nl-parsed" id="cm-nl-parsed"></span>
-      </label>
-      <label>
-        <span>repo <em>(pick from <code id="cm-base-dir">~/repositories</code> · <a href="#" id="cm-change-base">change</a>)</em></span>
-        <select id="cm-repo-select">
+        <span>repo <em>(from <code id="cm-base-dir">~/repositories</code> · <a href="#" id="cm-change-base">change</a>)</em></span>
+        <select id="cm-repo-select" autofocus>
           <option value="">(loading…)</option>
         </select>
         <span class="repo-status" id="cm-repo-status"></span>
@@ -327,6 +321,7 @@ function openNewSessionModal(): void {
         <span>new branch name <em>(blank = auto <code>feat/&lt;id&gt;</code>)</em></span>
         <input id="cm-branch" type="text" placeholder="feat/my-feature" />
       </label>
+      <p class="hint">tip: from your regular Copilot CLI, ask it to spawn an HQ session in natural language — it'll call <code>POST /api/intent/create-session</code> and a tab will appear here automatically. see <code>docs/HQ-COPILOT-INSTRUCTIONS.md</code>.</p>
       <p class="hint">a fresh git worktree on the new branch is created under <code>~/.copilot-multi/wt/&lt;id&gt;/</code>. your main checkout is never touched. uncommitted work is auto-committed on exit — branches always persist.</p>
       <div class="modal-actions">
         <button class="ghost" id="cm-cancel">cancel</button>
@@ -338,8 +333,6 @@ function openNewSessionModal(): void {
   unlockAudio();
   ensurePermission();
 
-  const nlInput     = overlay.querySelector('#cm-nl') as HTMLTextAreaElement;
-  const nlParsedEl  = overlay.querySelector('#cm-nl-parsed') as HTMLSpanElement;
   const repoSelect  = overlay.querySelector('#cm-repo-select') as HTMLSelectElement;
   const baseSelect  = overlay.querySelector('#cm-base') as HTMLSelectElement;
   const branchInput = overlay.querySelector('#cm-branch') as HTMLInputElement;
@@ -347,7 +340,6 @@ function openNewSessionModal(): void {
   const baseDirEl   = overlay.querySelector('#cm-base-dir') as HTMLElement;
   const changeBase  = overlay.querySelector('#cm-change-base') as HTMLAnchorElement;
 
-  let discoveredRepos: RepoCandidate[] = [];
   let currentBase = lastBase || '~/repositories';
   baseDirEl.textContent = currentBase;
 
@@ -369,19 +361,18 @@ function openNewSessionModal(): void {
       currentBase = data.base ?? base;
       baseDirEl.textContent = currentBase;
       lsSet(LS_KEYS.lastReposBase, currentBase);
-      discoveredRepos = data.repos ?? [];
-      if (discoveredRepos.length === 0) {
+      const repos = data.repos ?? [];
+      if (repos.length === 0) {
         repoSelect.innerHTML = `<option value="">(no git repos found in ${escapeHtml(currentBase)})</option>`;
         return;
       }
       const opts = ['<option value="">(choose a repo)</option>'];
-      for (const repo of discoveredRepos) {
+      for (const repo of repos) {
         const selected = repo.path === lastRepo ? ' selected' : '';
         opts.push(`<option value="${escapeHtml(repo.path)}"${selected}>${escapeHtml(repo.name)}${repo.defaultBranch ? '  ·  ' + escapeHtml(repo.defaultBranch) : ''}</option>`);
       }
       repoSelect.innerHTML = opts.join('');
       repoSelect.disabled = false;
-      // If we have a last-used repo, immediately load its branches.
       if (repoSelect.value) void refreshBranches(repoSelect.value);
     } catch (e) {
       repoSelect.innerHTML = `<option value="">(${escapeHtml((e as Error).message)})</option>`;
@@ -425,58 +416,9 @@ function openNewSessionModal(): void {
     }
   }
 
-  // ── Wire the NL parser ─────────────────────────────────────────────
-  // As the user types, parse → fill the three fields. Live, debounced 120ms.
-  let nlTimer: number | null = null;
-  let userTouchedBranch = false;
-  branchInput.addEventListener('input', () => { userTouchedBranch = true; });
-
-  function applyParse(): void {
-    const phrase = nlInput.value;
-    if (!phrase.trim()) {
-      nlParsedEl.textContent = '';
-      return;
-    }
-    const result = parseIntent(phrase, discoveredRepos);
-    const bits: string[] = [];
-    if (result.repo) {
-      // Set repo dropdown if it differs.
-      if (repoSelect.value !== result.repo.path) {
-        repoSelect.value = result.repo.path;
-        // Trigger branches load.
-        void refreshBranches(result.repo.path).then(() => {
-          // After branches arrive, try setting base if NL suggested one.
-          if (result.baseBranch) trySetBase(result.baseBranch);
-        });
-      } else if (result.baseBranch) {
-        trySetBase(result.baseBranch);
-      }
-      bits.push(`📂 ${result.repo.name}`);
-    } else {
-      bits.push('📂 <no match — pick manually>');
-    }
-    // Branch name: only overwrite if user hasn't typed manually.
-    if (!userTouchedBranch) {
-      branchInput.value = result.branchName;
-    }
-    bits.push(`🌿 ${result.branchName}`);
-    if (result.baseBranch) bits.push(`⇲ off ${result.baseBranch}`);
-    bits.push(`<span class="conf conf-${result.confidence}">${result.confidence}</span>`);
-    nlParsedEl.innerHTML = bits.join('  ·  ');
-  }
-
-  function trySetBase(b: string): void {
-    const opt = Array.from(baseSelect.options).find((o) => o.value === b);
-    if (opt) baseSelect.value = b;
-  }
-
-  nlInput.addEventListener('input', () => {
-    if (nlTimer != null) clearTimeout(nlTimer);
-    nlTimer = window.setTimeout(applyParse, 120);
-  });
-
   repoSelect.addEventListener('change', () => {
     void refreshBranches(repoSelect.value);
+    branchInput.focus();
   });
 
   changeBase.addEventListener('click', (ev) => {
@@ -485,7 +427,6 @@ function openNewSessionModal(): void {
     if (next && next.trim()) void discoverAndFill(next.trim());
   });
 
-  // Initial discovery
   void discoverAndFill(currentBase);
 
   const cleanup = () => overlay.remove();
@@ -521,7 +462,7 @@ function openNewSessionModal(): void {
       cleanup();
     }
   });
-  nlInput.focus();
+  repoSelect.focus();
 }
 
 newBtn.addEventListener('click', () => { unlockAudio(); openNewSessionModal(); });

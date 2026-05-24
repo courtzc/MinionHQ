@@ -166,6 +166,75 @@ const httpServer = createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
     }
   }
+
+  // ─── Intent endpoint: external NL agents call this to spawn a session ─
+  // POST { repo, branch?, base?, prompt? }
+  //   repo   — repo name (resolved against discoverRepos) or absolute path
+  //   branch — new branch name (default: feat/<id>)
+  //   base   — base branch to fork off (default: repo's current branch)
+  //   prompt — optional initial prompt to type once Copilot is ready
+  // Returns { ok, id, branch, worktreePath, repoPath }.
+  if (url.pathname === '/api/intent/create-session' && req.method === 'POST') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c as Buffer));
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as {
+          repo?: string; branch?: string; base?: string; prompt?: string;
+        };
+        if (!body.repo || !body.repo.trim()) {
+          res.statusCode = 400;
+          return res.end(JSON.stringify({ ok: false, error: 'missing repo' }));
+        }
+
+        let repoPath = body.repo.trim();
+        if (!repoPath.startsWith('/') && !repoPath.startsWith('~')) {
+          // Treat as a repo name; resolve against the default discovery base.
+          const { repos } = discoverRepos();
+          const hit = repos.find((r) => r.name === repoPath)
+                   ?? repos.find((r) => r.name.toLowerCase() === repoPath.toLowerCase());
+          if (!hit) {
+            res.statusCode = 404;
+            return res.end(JSON.stringify({
+              ok: false,
+              error: `repo not found: ${repoPath}. Known: ${repos.map((r) => r.name).join(', ')}`,
+            }));
+          }
+          repoPath = hit.path;
+        }
+
+        const meta = sessionManager.spawn({
+          cwd: repoPath,
+          repoPath,
+          branchName: body.branch?.trim() || undefined,
+          baseBranch: body.base?.trim() || undefined,
+        });
+        broadcast({ t: 'session.created', session: meta });
+
+        if (body.prompt && body.prompt.trim()) {
+          // Wait briefly for Copilot to render its prompt before injecting.
+          const text = body.prompt.trim() + '\n';
+          setTimeout(() => {
+            try { sessionManager.input(meta.id, Buffer.from(text, 'utf8')); } catch { /* ignore */ }
+          }, 2500);
+        }
+
+        return res.end(JSON.stringify({
+          ok: true,
+          id: meta.id,
+          branch: meta.branch,
+          worktreePath: meta.worktreePath,
+          repoPath: meta.repoPath,
+          openInBrowser: `http://${req.headers.host ?? '127.0.0.1:4242'}/#${meta.id}`,
+        }));
+      } catch (e) {
+        res.statusCode = 500;
+        return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+      }
+    });
+    return;
+  }
   if (url.pathname === '/api/repo/branches') {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     const p = url.searchParams.get('path') ?? '';
