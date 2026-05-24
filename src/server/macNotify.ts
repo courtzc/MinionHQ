@@ -19,7 +19,7 @@ import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 
-export type MacNotifyKind = 'needs-input' | 'done' | 'error';
+export type MacNotifyKind = 'needs-input' | 'agent-finished' | 'error';
 
 const IS_DARWIN = process.platform === 'darwin';
 
@@ -47,18 +47,18 @@ async function detect(): Promise<void> {
  */
 function soundFor(kind: MacNotifyKind): string {
   switch (kind) {
-    case 'needs-input': return 'Tink';
-    case 'done':        return 'Glass';
-    case 'error':       return 'Basso';
+    case 'needs-input':    return 'Tink';
+    case 'agent-finished': return 'Glass';
+    case 'error':          return 'Basso';
   }
 }
 
 function titleFor(kind: MacNotifyKind, sessionLabel: string | null): string {
   const tag = sessionLabel ? ` — ${sessionLabel}` : '';
   switch (kind) {
-    case 'needs-input': return `MinionHQ: needs input${tag}`;
-    case 'done':        return `MinionHQ: done${tag}`;
-    case 'error':       return `MinionHQ: error${tag}`;
+    case 'needs-input':    return `MinionHQ: needs input${tag}`;
+    case 'agent-finished': return `MinionHQ: agent finished${tag}`;
+    case 'error':          return `MinionHQ: error${tag}`;
   }
 }
 

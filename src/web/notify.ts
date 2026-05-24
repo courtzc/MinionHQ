@@ -1,4 +1,4 @@
-export type NotifyKind = 'needs-input' | 'done' | 'error';
+export type NotifyKind = 'needs-input' | 'agent-finished' | 'error';
 
 let permissionAsked = false;
 let macSupported: boolean | null = null;
@@ -31,9 +31,9 @@ export function ensurePermission(): void {
 function browserTitle(kind: NotifyKind, sessionTitle?: string | null): string {
   const tag = sessionTitle ? ` — ${sessionTitle}` : '';
   switch (kind) {
-    case 'needs-input': return `MinionHQ: needs input${tag}`;
-    case 'done':        return `MinionHQ: done${tag}`;
-    case 'error':       return `MinionHQ: error${tag}`;
+    case 'needs-input':    return `MinionHQ: needs input${tag}`;
+    case 'agent-finished': return `MinionHQ: agent finished${tag}`;
+    case 'error':          return `MinionHQ: error${tag}`;
   }
 }
 

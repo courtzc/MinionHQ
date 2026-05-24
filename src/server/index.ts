@@ -316,8 +316,8 @@ const httpServer = createServer(async (req, res) => {
       try {
         const body = await readJsonBody<{ kind?: string; sessionLabel?: string | null; body?: string; openUrl?: string }>(req);
         const kind = body.kind;
-        if (kind !== 'needs-input' && kind !== 'done' && kind !== 'error') {
-          return jsonErr(res, 400, 'kind must be needs-input | done | error');
+        if (kind !== 'needs-input' && kind !== 'agent-finished' && kind !== 'error') {
+          return jsonErr(res, 400, 'kind must be needs-input | agent-finished | error');
         }
         const transport = await notifyMac({
           kind,

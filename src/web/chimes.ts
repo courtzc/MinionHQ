@@ -1,11 +1,13 @@
 // Web Audio synthesized chimes. Three distinct timbres so they're
 // instantly distinguishable without volume cranked:
 //
-//   needs-input — soft two-note rising ping (calm "hey")
-//   done        — bright major-third arpeggio (cheerful)
-//   error       — descending minor semitone (gentle alert, not jarring)
+//   needs-input    — UNRESOLVED ascending 1–3–5 (C E G), hangs on the 5
+//                    so it feels like a question waiting for an answer.
+//   agent-finished — RESOLVED 1–3–5–1 (C E G C), classic major-octave
+//                    cadence — "I'm done, ready for you".
+//   error          — descending minor semitone (gentle alert, not jarring).
 
-export type ChimeKind = 'needs-input' | 'done' | 'error';
+export type ChimeKind = 'needs-input' | 'agent-finished' | 'error';
 
 let ctx: AudioContext | null = null;
 function ac(): AudioContext {
@@ -48,13 +50,16 @@ export function playChime(kind: ChimeKind): void {
     if (a.state === 'suspended') a.resume().catch(() => { /* ignore */ });
     switch (kind) {
       case 'needs-input':
-        // Soft rising two-note: C5 → E5 (262 → 330)... bumped up an octave
-        note(523.25, 0.0, 0.18, 0.14, 'sine');
-        note(659.25, 0.16, 0.28, 0.14, 'sine');
+        // UNRESOLVED: 1–3–5 ascending (C E G) — hangs on the 5th, feels like
+        // a question. Same intervals as agent-finished but missing the
+        // octave resolution, so the two kinds are obviously related cousins.
+        note(523.25, 0.0,  0.16, 0.14, 'triangle');
+        note(659.25, 0.10, 0.16, 0.14, 'triangle');
+        note(783.99, 0.20, 0.34, 0.16, 'triangle');
         break;
-      case 'done':
-        // Major arpeggio C E G C (cheerful, finished)
-        note(523.25, 0.0, 0.16, 0.14, 'triangle');
+      case 'agent-finished':
+        // RESOLVED: 1–3–5–1 (C E G C) major arpeggio with octave landing.
+        note(523.25, 0.0,  0.16, 0.14, 'triangle');
         note(659.25, 0.10, 0.16, 0.14, 'triangle');
         note(783.99, 0.20, 0.16, 0.14, 'triangle');
         note(1046.5, 0.30, 0.34, 0.16, 'triangle');

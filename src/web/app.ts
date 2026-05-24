@@ -256,7 +256,14 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     });
     tabEl.append(dot, label, pop, close);
     tabEl.addEventListener('click', () => activate(meta.id));
-    tabsEl.appendChild(tabEl);
+    // Insert before the inline "+" button so it stays as the last child of .tabs
+    // and visually floats just to the right of the last tab.
+    const inlineNew = document.getElementById('inline-new');
+    if (inlineNew && inlineNew.parentElement === tabsEl) {
+      tabsEl.insertBefore(tabEl, inlineNew);
+    } else {
+      tabsEl.appendChild(tabEl);
+    }
 
     // remove empty splash if present
     const empty = panesEl.querySelector('.empty');
@@ -400,10 +407,10 @@ function updateStatus(id: string, status: SessionStatus) {
   if (prev === status) return;
   const isActiveTab = id === activeId && document.visibilityState === 'visible' && document.hasFocus();
 
-  let kind: 'needs-input' | 'done' | 'error' | null = null;
+  let kind: 'needs-input' | 'agent-finished' | 'error' | null = null;
   if (status === 'needs-input' && prev !== 'needs-input') kind = 'needs-input';
   else if (status === 'error' && prev !== 'error') kind = 'error';
-  else if (status === 'idle' && (prev === 'working' || prev === 'spawning')) kind = 'done';
+  else if (status === 'idle' && (prev === 'working' || prev === 'spawning')) kind = 'agent-finished';
 
   if (kind && !isActiveTab) {
     if (chimesEnabled) playChime(kind);
@@ -703,7 +710,7 @@ function wireSettings(): void {
     chimesEnabled = !chimesEnabled;
     lsSet(LS_KEYS.chimesEnabled, String(chimesEnabled));
     sync();
-    if (chimesEnabled) playChime('done');
+    if (chimesEnabled) playChime('agent-finished');
   });
   notifyBtn?.addEventListener('click', () => {
     notifyEnabled = !notifyEnabled;
@@ -763,18 +770,34 @@ async function refreshCtxList(): Promise<void> {
   await loadCtxList(repo);
 }
 
+function refitActiveTerminal(): void {
+  if (!activeId) return;
+  const t = tabs.get(activeId);
+  if (!t) return;
+  try { t.fit.fit(); } catch { /* ignore */ }
+}
+
+/**
+ * Trigger several fit calls across the drawer's CSS transition window so the
+ * active terminal lands at the right size at every stage:
+ *   - immediately (catch the layout change)
+ *   - mid-transition (rAF + 50ms)
+ *   - post-transition (220ms after the 180ms CSS transition completes)
+ *   - belt-and-suspenders (400ms, in case anything else is in flight)
+ */
+function refitAfterDrawerToggle(): void {
+  refitActiveTerminal();
+  requestAnimationFrame(() => { refitActiveTerminal(); });
+  setTimeout(refitActiveTerminal, 50);
+  setTimeout(refitActiveTerminal, 220);
+  setTimeout(refitActiveTerminal, 400);
+}
+
 async function openCtxDrawer(): Promise<void> {
   if (!ctxDrawer) return;
   ctxDrawer.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawer-open');
-  // Resize the active terminal so it fits the new (narrower) pane width.
-  // requestAnimationFrame lets the CSS transition settle before measuring.
-  requestAnimationFrame(() => {
-    if (activeId) {
-      const t = tabs.get(activeId);
-      try { t?.fit.fit(); } catch { /* ignore */ }
-    }
-  });
+  refitAfterDrawerToggle();
   await refreshCtxList();
 }
 
@@ -782,12 +805,7 @@ function closeCtxDrawer(): void {
   if (!ctxDrawer) return;
   ctxDrawer.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('drawer-open');
-  requestAnimationFrame(() => {
-    if (activeId) {
-      const t = tabs.get(activeId);
-      try { t?.fit.fit(); } catch { /* ignore */ }
-    }
-  });
+  refitAfterDrawerToggle();
 }
 
 async function loadCtxList(repo: string): Promise<void> {
