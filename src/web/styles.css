@@ -41,12 +41,21 @@ body {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
   letter-spacing: 0.2px;
   color: var(--fg);
   padding: 0 6px;
 }
-.brand span { color: var(--accent); }
+.brand-logo {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+.brand-name { line-height: 1; }
+.brand-name span { color: var(--accent); }
 
 .tabs {
   display: flex;
