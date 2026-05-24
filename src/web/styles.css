@@ -133,6 +133,25 @@ main#panes {
   overflow: hidden;
 }
 
+/* Hide xterm's vertical scrollbar so it doesn't steal horizontal columns.
+   When the scrollbar appears mid-stream, the usable cols shrink but the PTY
+   still thinks it has the old width, causing lines to wrap weirdly. The
+   xterm.js terminal still scrolls via mouse wheel / keyboard / touch.
+   Vendor selector is `.xterm .xterm-viewport`, so we match its specificity. */
+.term-wrap .xterm .xterm-viewport {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+.term-wrap .xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+.term-wrap .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
 .status {
   background: var(--bg-2);
   border-top: 1px solid var(--border);

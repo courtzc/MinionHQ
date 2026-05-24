@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { db } from './db.js';
@@ -14,6 +16,29 @@ import type { SessionMeta, SessionStatus } from '../shared/protocol.js';
 
 const REPLAY_MAX = 256 * 1024;
 const COPILOT_SESSION_ID_RE = /session[ _-]?id[:=]\s*([0-9a-f-]{8,})/i;
+
+/**
+ * Pre-trust a folder by adding it to Copilot CLI's ~/.copilot/config.json
+ * trustedFolders array. Without this, every new worktree triggers a blocking
+ * "Confirm folder trust" prompt on session start.
+ */
+function preTrustFolder(folder: string): void {
+  const configPath = join(homedir(), '.copilot', 'config.json');
+  if (!existsSync(configPath)) return;
+  try {
+    const raw = readFileSync(configPath, 'utf-8');
+    // Strip leading "// ..." comment lines that Copilot's config has
+    const jsonStr = raw.replace(/^\s*\/\/[^\n]*\n/gm, '');
+    const cfg = JSON.parse(jsonStr);
+    const list: string[] = Array.isArray(cfg.trustedFolders) ? cfg.trustedFolders : [];
+    if (list.includes(folder)) return;
+    list.push(folder);
+    cfg.trustedFolders = list;
+    writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  } catch {
+    // Non-fatal: Copilot will just prompt the user, which is the existing UX.
+  }
+}
 
 interface Internal {
   meta: SessionMeta;
@@ -87,6 +112,10 @@ class SessionManager extends EventEmitter {
       env.PATH = `${localBin}:${env.PATH ?? ''}`;
     }
     env.TERM = env.TERM ?? 'xterm-256color';
+
+    // Pre-trust the worktree folder so Copilot doesn't open with a blocking
+    // "Confirm folder trust" prompt on every new session.
+    if (worktreePath) preTrustFolder(worktreePath);
 
     const proc = pty.spawn(bin, args, {
       name: 'xterm-256color',
