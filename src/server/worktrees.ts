@@ -206,14 +206,14 @@ export function saveWorktreeWork(worktreePath: string, sessionId: string): SaveR
     const userArgs: string[] = [];
     if (!hasUser) {
       userArgs.push(
-        '-c', 'user.email=copilot-multi@local',
-        '-c', 'user.name=copilot-multi',
+        '-c', 'user.email=minionhq@local',
+        '-c', 'user.name=MinionHQ',
       );
     }
 
     run('git', ['add', '-A'], worktreePath);
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const msg = `[copilot-multi] WIP ${ts} (session ${sessionId.slice(0, 8)})`;
+    const msg = `[minionhq] WIP ${ts} (session ${sessionId.slice(0, 8)})`;
     // Use --no-verify to skip pre-commit hooks — this is a safety net commit.
     run('git', [...userArgs, 'commit', '--no-verify', '-m', msg], worktreePath);
     const sha = tryRun('git', ['rev-parse', 'HEAD'], worktreePath) ?? undefined;

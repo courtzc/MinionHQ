@@ -1,19 +1,19 @@
 # Global instructions for the GitHub Copilot CLI
 
-## HQ — the user's multi-session Copilot dashboard
+## MinionHQ — the user's multi-session Copilot dashboard
 
-The user runs a local web app called **HQ** (in `~/repositories/copilot-multi`)
+The user runs a local web app called **MinionHQ** (in `~/repositories/MinionHQ`)
 that manages multiple parallel Copilot CLI sessions, each on its own git
-worktree and branch. The HQ HTTP API runs at **http://127.0.0.1:4242**.
+worktree and branch. The MinionHQ HTTP API runs at **http://127.0.0.1:4242**.
 
-### When to spawn an HQ session
+### When to spawn a MinionHQ session
 
 When the user expresses intent like one of these — in any phrasing — they
-want a new HQ session, not for you to do the work yourself:
+want a new MinionHQ session, not for you to do the work yourself:
 
 - "make me a new branch in <repo> for <thing>"
 - "spawn a session in <repo> to <thing>"
-- "fire up an HQ tab for <thing> in <repo>"
+- "fire up a MinionHQ tab for <thing> in <repo>"
 - "new copilot for <thing> in <repo>"
 - "kick off a session in <repo> off <branch> to <thing>"
 
@@ -24,7 +24,7 @@ fields. Otherwise ask once, briefly.
 
 1. Resolve the user's intent into three fields:
    - **repo**: the short repo name (e.g. `fde-intake-automation`, `CAIRA`,
-     `copilot-multi`). HQ will resolve names against `~/repositories`. If
+     `MinionHQ`). MinionHQ will resolve names against `~/repositories`. If
      unsure, list candidates by running `ls ~/repositories`.
    - **branch**: a short, informative branch name with a conventional
      prefix (`feat/`, `fix/`, `chore/`, `docs/`, `test/`, `refactor/`,
@@ -33,13 +33,13 @@ fields. Otherwise ask once, briefly.
      - "fix the chime throttle" → `fix/chime-throttle`
      - "update deps" → `chore/update-deps`
    - **base** *(optional)*: base branch to fork off. If the user said
-     "off main" or "based on dev", honor it. Otherwise omit (HQ uses the
+     "off main" or "based on dev", honor it. Otherwise omit (MinionHQ uses the
      repo's current branch).
    - **prompt** *(optional)*: the actual task to inject as the first
      message to Copilot inside the new session. This is the meat of the
      request, paraphrased into a directive.
 
-2. Call HQ with one bash command:
+2. Call MinionHQ with one bash command:
 
    ```bash
    curl -sS -X POST http://127.0.0.1:4242/api/intent/create-session \
@@ -48,7 +48,7 @@ fields. Otherwise ask once, briefly.
    ```
 
 3. Report back to the user with the branch name and the worktree path
-   from the response JSON. Tell them the new tab is open in HQ at
+   from the response JSON. Tell them the new tab is open in MinionHQ at
    http://127.0.0.1:4242 (no need to copy/paste the openInBrowser URL —
    the tab auto-appears).
 
@@ -56,9 +56,9 @@ fields. Otherwise ask once, briefly.
 
 - If `curl` returns `{"ok":false,"error":"repo not found: ..."}`, list
   the candidates from the error message and ask which one.
-- If HQ is not running (connection refused), tell the user to start it:
-  `cd ~/repositories/copilot-multi && npm start`.
-- Don't ever try to start the worktree yourself — HQ owns all worktrees
+- If MinionHQ is not running (connection refused), tell the user to start it:
+  `cd ~/repositories/MinionHQ && npm start`.
+- Don't ever try to start the worktree yourself — MinionHQ owns all worktrees
   and branch creation. Just call the endpoint.
 
 ### Example end-to-end
@@ -75,8 +75,8 @@ curl -sS -X POST http://127.0.0.1:4242/api/intent/create-session \
 
 Response:
 ```json
-{"ok":true,"id":"...","branch":"feat/data-viz","worktreePath":"/Users/court/.copilot-multi/wt/.../",...}
+{"ok":true,"id":"...","branch":"feat/data-viz","worktreePath":"/Users/court/.minionhq/wt/.../",...}
 ```
 
 Reply: "Spawned `feat/data-viz` in fde-intake-automation. Worktree at
-`~/.copilot-multi/wt/<id>/`. The tab should be open in HQ now."
+`~/.minionhq/wt/<id>/`. The tab should be open in MinionHQ now."

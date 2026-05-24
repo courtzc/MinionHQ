@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const ROOT_DIR = join(homedir(), '.copilot-multi');
+export const ROOT_DIR = join(homedir(), '.minionhq');
 export const LOGS_DIR = join(ROOT_DIR, 'logs');
 export const WORKTREE_DIR = join(ROOT_DIR, 'wt');
 export const REPOS_DIR = join(ROOT_DIR, 'repos');

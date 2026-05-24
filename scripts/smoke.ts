@@ -74,7 +74,7 @@ function finish() {
   // still exists after exit since saveWorktreeWork only commits if dirty —
   // actually we keep the worktree dir on exit per the "never auto-delete" rule).
   console.log('\n[smoke] on-disk checks:');
-  const wtRoot = '/Users/court/.copilot-multi/wt';
+  const wtRoot = '/Users/court/.minionhq/wt';
   if (!existsSync(wtRoot)) { console.log('  - no wt dir'); return; }
   const sessions = readdirSync(wtRoot);
   console.log('  - worktree dirs:', sessions);
@@ -82,7 +82,7 @@ function finish() {
   const sid = sessions[0];
   const wtPath = join(wtRoot, sid);
   const agents = join(wtPath, 'AGENTS.md');
-  const ctxRoot = join(wtPath, '.copilot-multi');
+  const ctxRoot = join(wtPath, '.minionhq');
   const link = join(ctxRoot, 'repo-context');
 
   console.log('  - AGENTS.md exists:', existsSync(agents));
@@ -90,9 +90,9 @@ function finish() {
     const head = readFileSync(agents, 'utf8').split('\n').slice(0, 6).join('\n');
     console.log('    head:', head);
   }
-  console.log('  - .copilot-multi/ exists:', existsSync(ctxRoot));
-  console.log('  - .copilot-multi/.gitignore exists:', existsSync(join(ctxRoot, '.gitignore')));
-  console.log('  - .copilot-multi/notes/ exists:', existsSync(join(ctxRoot, 'notes')));
+  console.log('  - .minionhq/ exists:', existsSync(ctxRoot));
+  console.log('  - .minionhq/.gitignore exists:', existsSync(join(ctxRoot, '.gitignore')));
+  console.log('  - .minionhq/notes/ exists:', existsSync(join(ctxRoot, 'notes')));
   if (existsSync(link)) {
     const lst = lstatSync(link);
     console.log('  - repo-context is symlink:', lst.isSymbolicLink());

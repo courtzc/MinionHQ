@@ -14,9 +14,9 @@ export function ensurePermission(): void {
 function title(kind: NotifyKind, sessionTitle?: string | null): string {
   const tag = sessionTitle ? ` — ${sessionTitle}` : '';
   switch (kind) {
-    case 'needs-input': return `copilot-multi: needs input${tag}`;
-    case 'done':        return `copilot-multi: done${tag}`;
-    case 'error':       return `copilot-multi: error${tag}`;
+    case 'needs-input': return `MinionHQ: needs input${tag}`;
+    case 'done':        return `MinionHQ: done${tag}`;
+    case 'error':       return `MinionHQ: error${tag}`;
   }
 }
 
@@ -28,7 +28,7 @@ export function notify(kind: NotifyKind, sessionTitle?: string | null, body?: st
   try {
     const n = new Notification(title(kind, sessionTitle), {
       body: body ?? '',
-      tag: `copilot-multi-${kind}`,
+      tag: `minionhq-${kind}`,
       silent: true,
     });
     n.onclick = () => { window.focus(); n.close(); };

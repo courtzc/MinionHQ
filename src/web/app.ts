@@ -336,8 +336,8 @@ function openNewSessionModal(): void {
         <span>new branch name <em>(blank = auto <code>feat/&lt;id&gt;</code>)</em></span>
         <input id="cm-branch" type="text" placeholder="feat/my-feature" />
       </label>
-      <p class="hint">tip: from your regular Copilot CLI, ask it to spawn an HQ session in natural language — it'll call <code>POST /api/intent/create-session</code> and a tab will appear here automatically. see <code>docs/HQ-COPILOT-INSTRUCTIONS.md</code>.</p>
-      <p class="hint">a fresh git worktree on the new branch is created under <code>~/.copilot-multi/wt/&lt;id&gt;/</code>. your main checkout is never touched. uncommitted work is auto-committed on exit — branches always persist.</p>
+      <p class="hint">tip: from your regular Copilot CLI, ask it to spawn a MinionHQ session in natural language — it'll call <code>POST /api/intent/create-session</code> and a tab will appear here automatically. see <code>docs/MINIONHQ-COPILOT-INSTRUCTIONS.md</code>.</p>
+      <p class="hint">a fresh git worktree on the new branch is created under <code>~/.minionhq/wt/&lt;id&gt;/</code>. your main checkout is never touched. uncommitted work is auto-committed on exit — branches always persist.</p>
       <div class="modal-actions">
         <button class="ghost" id="cm-cancel">cancel</button>
         <button class="primary" id="cm-ok">spawn</button>

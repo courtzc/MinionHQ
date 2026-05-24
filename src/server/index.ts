@@ -38,7 +38,7 @@ db(); // initialise + migrate
 // death. They'll show up in the resume picker and via smart-reuse in spawn().
 const restored = sessionManager.restoreDormant();
 if (restored.restored > 0 || restored.skipped > 0) {
-  console.log(`[copilot-multi] restored ${restored.restored} dormant session(s), skipped ${restored.skipped}`);
+  console.log(`[minionhq] restored ${restored.restored} dormant session(s), skipped ${restored.skipped}`);
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -475,15 +475,15 @@ sessionManager.on('status', ({ id, status }: { id: string; status: SessionStatus
 
 httpServer.listen(DEFAULTS.port, DEFAULTS.host, () => {
   const url = `http://${DEFAULTS.host}:${DEFAULTS.port}`;
-  console.log(`[copilot-multi] listening on ${url}`);
-  console.log(`[copilot-multi]   open ${url}  in your browser`);
+  console.log(`[minionhq] listening on ${url}`);
+  console.log(`[minionhq]   open ${url}  in your browser`);
 });
 
 let shuttingDown = false;
 function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`\n[copilot-multi] ${signal} — shutting down...`);
+  console.log(`\n[minionhq] ${signal} — shutting down...`);
   sessionManager.shutdownAll();
   closeAllLogs();
   wss.close();
