@@ -459,5 +459,181 @@ function wireSettings(): void {
 }
 wireSettings();
 
+// ─────────────────────────── context drawer ────────────────────────────────
+const ctxDrawer = document.getElementById('context-drawer') as HTMLElement | null;
+const ctxOpenBtn = document.getElementById('open-context') as HTMLButtonElement | null;
+const ctxCloseBtn = document.getElementById('close-context') as HTMLButtonElement | null;
+const ctxMeta = document.getElementById('ctx-meta') as HTMLElement | null;
+const ctxList = document.getElementById('ctx-list') as HTMLElement | null;
+const ctxFilename = document.getElementById('ctx-filename') as HTMLInputElement | null;
+const ctxContent = document.getElementById('ctx-content') as HTMLTextAreaElement | null;
+const ctxSaveBtn = document.getElementById('ctx-save') as HTMLButtonElement | null;
+const ctxNewBtn = document.getElementById('ctx-new') as HTMLButtonElement | null;
+const ctxDeleteBtn = document.getElementById('ctx-delete') as HTMLButtonElement | null;
+const ctxStatus = document.getElementById('ctx-status') as HTMLElement | null;
+
+interface CtxFile { name: string; size: number; modified: number; }
+let ctxCurrentRepo: string | null = null;
+let ctxCurrentFile: string | null = null;
+let ctxFiles: CtxFile[] = [];
+
+function activeRepoPath(): string | null {
+  if (activeId) {
+    const t = tabs.get(activeId);
+    if (t?.meta.repoPath) return t.meta.repoPath;
+  }
+  return lsGet(LS_KEYS.lastRepo);
+}
+
+function setCtxStatus(text: string, cls: 'ok' | 'err' | '' = ''): void {
+  if (!ctxStatus) return;
+  ctxStatus.textContent = text;
+  ctxStatus.className = 'ctx-status' + (cls ? ' ' + cls : '');
+  if (text && cls === 'ok') {
+    window.setTimeout(() => {
+      if (ctxStatus && ctxStatus.textContent === text) ctxStatus.textContent = '';
+    }, 1800);
+  }
+}
+
+async function openCtxDrawer(): Promise<void> {
+  if (!ctxDrawer) return;
+  ctxDrawer.setAttribute('aria-hidden', 'false');
+  const repo = activeRepoPath();
+  if (!repo) {
+    if (ctxMeta) ctxMeta.textContent = 'No active repo. Open a session first, or set a repo via "+ new".';
+    if (ctxList) ctxList.innerHTML = '<div class="ctx-empty">No repo selected.</div>';
+    return;
+  }
+  await loadCtxList(repo);
+}
+
+function closeCtxDrawer(): void {
+  if (!ctxDrawer) return;
+  ctxDrawer.setAttribute('aria-hidden', 'true');
+}
+
+async function loadCtxList(repo: string): Promise<void> {
+  if (!ctxList || !ctxMeta) return;
+  ctxCurrentRepo = repo;
+  ctxMeta.textContent = `Loading ${repo}…`;
+  try {
+    const res = await fetch(`/api/repo/context/list?path=${encodeURIComponent(repo)}`);
+    const data = await res.json() as { ok: boolean; key?: string; centralDir?: string; files?: CtxFile[]; error?: string };
+    if (!data.ok) {
+      ctxMeta.textContent = `⚠ ${data.error}`;
+      ctxList.innerHTML = '';
+      return;
+    }
+    ctxMeta.innerHTML = `<div><strong>repo:</strong> ${repo}</div><div><strong>central:</strong> ${data.centralDir}</div>`;
+    ctxFiles = data.files ?? [];
+    renderCtxList();
+  } catch (e) {
+    ctxMeta.textContent = `⚠ ${(e as Error).message}`;
+  }
+}
+
+function renderCtxList(): void {
+  if (!ctxList) return;
+  if (ctxFiles.length === 0) {
+    ctxList.innerHTML = '<div class="ctx-empty">No context files yet. Click "New file" to add one.</div>';
+    return;
+  }
+  ctxList.innerHTML = '';
+  for (const f of ctxFiles) {
+    const item = document.createElement('div');
+    item.className = 'ctx-item' + (f.name === ctxCurrentFile ? ' active' : '');
+    item.innerHTML = `<span>${f.name}</span><span class="size">${f.size}b</span>`;
+    item.addEventListener('click', () => { void loadCtxFile(f.name); });
+    ctxList.appendChild(item);
+  }
+}
+
+async function loadCtxFile(name: string): Promise<void> {
+  if (!ctxCurrentRepo || !ctxFilename || !ctxContent) return;
+  try {
+    const res = await fetch(`/api/repo/context/read?path=${encodeURIComponent(ctxCurrentRepo)}&name=${encodeURIComponent(name)}`);
+    const data = await res.json() as { ok: boolean; content?: string; error?: string };
+    if (!data.ok) { setCtxStatus(data.error ?? 'read failed', 'err'); return; }
+    ctxCurrentFile = name;
+    ctxFilename.value = name;
+    ctxContent.value = data.content ?? '';
+    renderCtxList();
+    setCtxStatus('');
+  } catch (e) {
+    setCtxStatus((e as Error).message, 'err');
+  }
+}
+
+async function saveCtxFile(): Promise<void> {
+  if (!ctxCurrentRepo || !ctxFilename || !ctxContent) return;
+  const name = ctxFilename.value.trim();
+  if (!name) { setCtxStatus('filename required', 'err'); return; }
+  if (!/\.md$/i.test(name)) { setCtxStatus('must end in .md', 'err'); return; }
+  setCtxStatus('saving…');
+  try {
+    const res = await fetch('/api/repo/context/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: ctxCurrentRepo, name, content: ctxContent.value }),
+    });
+    const data = await res.json() as { ok: boolean; error?: string };
+    if (!data.ok) { setCtxStatus(data.error ?? 'save failed', 'err'); return; }
+    setCtxStatus('saved ✓', 'ok');
+    ctxCurrentFile = name;
+    await loadCtxList(ctxCurrentRepo);
+  } catch (e) {
+    setCtxStatus((e as Error).message, 'err');
+  }
+}
+
+async function deleteCtxFile(): Promise<void> {
+  if (!ctxCurrentRepo || !ctxCurrentFile) return;
+  if (!confirm(`Delete ${ctxCurrentFile}? This affects every session on this repo.`)) return;
+  try {
+    const res = await fetch('/api/repo/context/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: ctxCurrentRepo, name: ctxCurrentFile }),
+    });
+    const data = await res.json() as { ok: boolean; error?: string };
+    if (!data.ok) { setCtxStatus(data.error ?? 'delete failed', 'err'); return; }
+    if (ctxFilename) ctxFilename.value = '';
+    if (ctxContent) ctxContent.value = '';
+    ctxCurrentFile = null;
+    setCtxStatus('deleted', 'ok');
+    await loadCtxList(ctxCurrentRepo);
+  } catch (e) {
+    setCtxStatus((e as Error).message, 'err');
+  }
+}
+
+function newCtxFile(): void {
+  if (!ctxFilename || !ctxContent) return;
+  ctxCurrentFile = null;
+  ctxFilename.value = '';
+  ctxContent.value = '';
+  ctxFilename.focus();
+  renderCtxList();
+}
+
+ctxOpenBtn?.addEventListener('click', () => { void openCtxDrawer(); });
+ctxCloseBtn?.addEventListener('click', closeCtxDrawer);
+ctxSaveBtn?.addEventListener('click', () => { void saveCtxFile(); });
+ctxNewBtn?.addEventListener('click', newCtxFile);
+ctxDeleteBtn?.addEventListener('click', () => { void deleteCtxFile(); });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && ctxDrawer?.getAttribute('aria-hidden') === 'false') {
+    closeCtxDrawer();
+    e.preventDefault();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+    if (ctxDrawer?.getAttribute('aria-hidden') === 'false') closeCtxDrawer();
+    else void openCtxDrawer();
+    e.preventDefault();
+  }
+});
+
 connect();
 renderEmpty();

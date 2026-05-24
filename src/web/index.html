@@ -12,10 +12,31 @@
     <div class="brand">copilot<span>-multi</span></div>
     <nav class="tabs" id="tabs"></nav>
     <div class="actions">
+      <button id="open-context" title="Repo context (⌘.)">📚 context</button>
       <button id="new-session" title="New session (⌘T)">+ new</button>
     </div>
   </header>
   <main id="panes"></main>
+  <aside id="context-drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div class="drawer-title">Repo context</div>
+      <button class="drawer-close" id="close-context" title="Close (Esc)">✕</button>
+    </div>
+    <div class="drawer-meta" id="ctx-meta"></div>
+    <div class="drawer-body">
+      <div class="ctx-list" id="ctx-list"></div>
+      <div class="ctx-editor">
+        <input type="text" id="ctx-filename" placeholder="filename.md" />
+        <textarea id="ctx-content" placeholder="Markdown content shared across every session on this repo, on any branch."></textarea>
+        <div class="ctx-actions">
+          <button id="ctx-save">Save</button>
+          <button id="ctx-new" class="secondary">New file</button>
+          <button id="ctx-delete" class="danger">Delete</button>
+          <span class="ctx-status" id="ctx-status"></span>
+        </div>
+      </div>
+    </div>
+  </aside>
   <footer class="status">
     <span id="conn-state">connecting…</span>
     <span class="spacer"></span>
