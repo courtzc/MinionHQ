@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import type { ClientMsg, ServerMsg, SessionMeta, SessionStatus } from '../shared/protocol.js';
 import { playChime, unlockAudio } from './chimes.js';
 import { ensurePermission, notify } from './notify.js';
+import { colorForRepo } from './repoColors.js';
 import {
   BIN_PTY_DATA,
   BIN_PTY_INPUT,
@@ -232,6 +233,8 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     tabEl.className = 'tab';
     tabEl.dataset.id = meta.id;
     tabEl.dataset.status = meta.status;
+    // Per-repo accent color (border / underline). Deterministic by repoPath.
+    tabEl.style.setProperty('--repo-color', colorForRepo(meta.repoPath ?? null));
     const dot = document.createElement('span');
     dot.className = 'dot';
     const label = document.createElement('span');
@@ -350,6 +353,9 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
       labelNode.textContent = labelFor(meta);
       labelNode.title = labelFor(meta);
     }
+    // Refresh the repo color in case repoPath was filled in after the tab was
+    // initially created (e.g. dormant restore where repoPath shows up later).
+    t.tabEl.style.setProperty('--repo-color', colorForRepo(meta.repoPath ?? null));
     if (meta.status === 'spawning') {
       delete t.loadingEl.dataset.hidden;
       t.firstByteSeen = false;
@@ -402,8 +408,12 @@ function updateStatus(id: string, status: SessionStatus) {
     t.loadingEl.dataset.hidden = '1';
   }
 
-  // Chime + notify only on meaningful transitions, and only when the tab is
-  // not the currently-focused one (otherwise it's just noise).
+  // Chime + notify only on meaningful status transitions.
+  // - Chime ALWAYS fires (even when the tab is focused) — the user wants the
+  //   audible "agent finished" / "needs input" cue regardless of which tab
+  //   they're staring at.
+  // - OS notification toast still suppressed when this tab is currently
+  //   focused — a toast for the foreground app is noise.
   if (prev === status) return;
   const isActiveTab = id === activeId && document.visibilityState === 'visible' && document.hasFocus();
 
@@ -412,9 +422,9 @@ function updateStatus(id: string, status: SessionStatus) {
   else if (status === 'error' && prev !== 'error') kind = 'error';
   else if (status === 'idle' && (prev === 'working' || prev === 'spawning')) kind = 'agent-finished';
 
-  if (kind && !isActiveTab) {
+  if (kind) {
     if (chimesEnabled) playChime(kind);
-    if (notifyEnabled) notify(kind, labelFor(t.meta));
+    if (notifyEnabled && !isActiveTab) notify(kind, labelFor(t.meta));
   }
 }
 
@@ -677,13 +687,19 @@ async function openResumePicker(): Promise<void> {
   }
 }
 
+// Global keyboard shortcuts.
+//
+// We deliberately avoid plain ⌘T / ⌘W / ⌘1..9 because Edge, Chrome, and Safari
+// all intercept those before our keydown listener runs — preventDefault is too
+// late. Instead we use Ctrl+Alt+<key> (⌃⌥ on macOS, Ctrl+Alt on Windows/Linux),
+// which the browser doesn't grab for any built-in action.
 document.addEventListener('keydown', (ev) => {
-  const meta = ev.metaKey || ev.ctrlKey;
-  if (!meta) return;
-  if (ev.key === 't' || ev.key === 'T') {
+  if (!(ev.ctrlKey && ev.altKey)) return;
+  const k = ev.key.toLowerCase();
+  if (k === 't') {
     ev.preventDefault();
     openNewSessionModal();
-  } else if (ev.key === 'w' || ev.key === 'W') {
+  } else if (k === 'w') {
     if (activeId) {
       ev.preventDefault();
       if (confirm('close session?')) sendMsg({ t: 'session.close', id: activeId });
@@ -913,7 +929,13 @@ function newCtxFile(): void {
   renderCtxList();
 }
 
-ctxOpenBtn?.addEventListener('click', () => { void openCtxDrawer(); });
+// Click the "context" topbar button to TOGGLE the drawer (open if closed,
+// close if currently open). This way the same button users used to open it
+// also dismisses it without having to aim for the ✕.
+ctxOpenBtn?.addEventListener('click', () => {
+  if (ctxDrawer?.getAttribute('aria-hidden') === 'false') closeCtxDrawer();
+  else void openCtxDrawer();
+});
 ctxCloseBtn?.addEventListener('click', closeCtxDrawer);
 ctxSaveBtn?.addEventListener('click', () => { void saveCtxFile(); });
 ctxNewBtn?.addEventListener('click', newCtxFile);

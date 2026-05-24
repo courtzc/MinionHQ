@@ -35,10 +35,22 @@ html, body {
 
 body {
   display: grid;
+  /* Two columns: main pane + an animated drawer column that's 0 when closed
+     and expands to the drawer width when .drawer-open is on body. Animating
+     grid-template-columns is supported in all current evergreen browsers and
+     lets us guarantee the terminal *resizes* (rather than the drawer floating
+     over it). The xterm fit addon picks up the new width via ResizeObserver. */
   grid-template-rows: 40px 1fr 24px;
+  grid-template-columns: 1fr 0px;
+  transition: grid-template-columns 180ms ease-out;
+}
+body.drawer-open {
+  grid-template-columns: 1fr min(480px, 50vw);
 }
 
 .topbar {
+  grid-row: 1;
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   background: linear-gradient(180deg, var(--bg-2), var(--bg));
@@ -73,15 +85,24 @@ body {
   flex: 1;
   overflow-x: auto;
   scrollbar-width: thin;
+  /* CSS counter for auto-numbered Minion labels (M1, M2, M3…). Reset on the
+     container so the count restarts per page, increment on each .tab. The
+     ::before in `.tab` reads the counter as 'M<n>'. */
+  counter-reset: tab-num;
 }
 
 .tab {
+  --repo-color: var(--accent);
+  counter-increment: tab-num;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
+  padding: 7px 12px 6px;
   background: var(--bg-3);
-  border: 1px solid var(--border);
+  /* Always-on repo-colored outline. Inactive tabs use a translucent version
+     of the repo color so the hue is visible but doesn't compete with the
+     active tab. */
+  border: 1px solid color-mix(in srgb, var(--repo-color) 55%, transparent);
   border-bottom: none;
   border-radius: 8px 8px 0 0;
   cursor: pointer;
@@ -93,14 +114,39 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  transition: background 120ms, color 120ms, border-color 120ms;
+  transition: background 120ms, color 120ms, border-color 120ms, box-shadow 120ms;
+}
+.tab::before {
+  /* "M1", "M2", … minion-number badge */
+  content: 'M' counter(tab-num);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Mono", ui-monospace, monospace;
+  font-weight: 700;
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  color: var(--repo-color);
+  background: color-mix(in srgb, var(--repo-color) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--repo-color) 40%, transparent);
+  border-radius: 4px;
+  padding: 2px 5px;
+  flex-shrink: 0;
 }
 .tab:hover { color: var(--fg); background: var(--bg-elev); }
 .tab.active {
+  /* Active tab keeps the repo-color outline (full opacity now), but
+     additionally gets a brighter background, a bold label, and a thick
+     underline in the same color so it's unambiguous which tab is focused
+     without overriding the repo identity. */
   background: var(--bg);
   color: var(--fg);
-  border-color: var(--accent);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  font-weight: 700;
+  border-color: var(--repo-color);
+  box-shadow: inset 0 -3px 0 var(--repo-color),
+              0 0 0 1px color-mix(in srgb, var(--repo-color) 65%, transparent);
+}
+.tab.active::before {
+  background: color-mix(in srgb, var(--repo-color) 32%, transparent);
+  border-color: var(--repo-color);
 }
 .tab .label {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
@@ -178,9 +224,12 @@ body {
 }
 
 main#panes {
+  grid-row: 2;
+  grid-column: 1;
   position: relative;
   background: var(--bg);
   overflow: hidden;
+  min-width: 0; /* prevent grid blowout when terminal content is wide */
 }
 
 .pane {
@@ -220,6 +269,8 @@ main#panes {
 }
 
 .status {
+  grid-row: 3;
+  grid-column: 1 / -1;
   background: var(--bg-2);
   border-top: 1px solid var(--border);
   color: var(--fg-dim);
@@ -451,28 +502,25 @@ body.popout .pane { padding: 4px; }
 .modal-actions .primary:hover { filter: brightness(1.1); }
 
 /* ─── Context drawer ───────────────────────────────────────────────── */
+/* The drawer is a real grid cell (column 2, row 2) so when body.drawer-open
+   sets the second column from 0px → drawer width, the main pane physically
+   shrinks. No more transform-overlay tricks → the terminal genuinely resizes
+   and content stays fully visible. */
 .drawer {
-  position: fixed;
-  top: 40px;
-  right: 0;
-  bottom: 24px;
-  width: min(480px, 50vw);
+  grid-row: 2;
+  grid-column: 2;
   background: var(--bg-2);
   border-left: 1px solid var(--border-strong);
   box-shadow: -4px 0 16px rgba(0,0,0,0.4);
-  transform: translateX(100%);
-  transition: transform 180ms ease-out;
-  z-index: 100;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
-.drawer[aria-hidden="false"] { transform: translateX(0); }
-
-/* When the drawer is open, reserve space on the right of #panes so the
-   terminal resizes around it instead of being hidden under it. Width matches
-   the drawer's own width formula. */
-body.drawer-open main#panes {
-  padding-right: min(480px, 50vw);
+/* When closed the column is 0px wide; hide pointer events so users can't
+   accidentally click invisible buttons during the slide-out. */
+.drawer[aria-hidden="true"] {
+  pointer-events: none;
 }
 .drawer-head {
   display: flex;
