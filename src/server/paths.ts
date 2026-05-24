@@ -2,7 +2,9 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const ROOT_DIR = join(homedir(), '.minionhq');
+export const ROOT_DIR = process.env.MINIONHQ_HOME
+  ? join(process.env.MINIONHQ_HOME)
+  : join(homedir(), '.minionhq');
 export const LOGS_DIR = join(ROOT_DIR, 'logs');
 export const WORKTREE_DIR = join(ROOT_DIR, 'wt');
 export const REPOS_DIR = join(ROOT_DIR, 'repos');
@@ -10,9 +12,9 @@ export const DB_PATH = join(ROOT_DIR, 'db.sqlite');
 export const CONFIG_PATH = join(ROOT_DIR, 'config.json');
 
 export const DEFAULTS = {
-  host: process.env.COPILOT_MULTI_HOST ?? '127.0.0.1',
-  port: Number(process.env.COPILOT_MULTI_PORT ?? 4242),
-  copilotBin: process.env.COPILOT_MULTI_BIN ?? 'copilot',
+  host: process.env.MINIONHQ_HOST ?? '127.0.0.1',
+  port: Number(process.env.MINIONHQ_PORT ?? 4242),
+  copilotBin: process.env.MINIONHQ_COPILOT_BIN ?? 'copilot',
 };
 
 export function ensureDirs() {

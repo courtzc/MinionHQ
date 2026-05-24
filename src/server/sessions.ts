@@ -8,6 +8,7 @@ import type { IPty } from 'node-pty';
 import { db } from './db.js';
 import { appendPty, closeSessionLogs, logEvent } from './logs.js';
 import { DEFAULTS } from './paths.js';
+import { LIMITS } from './limits.js';
 import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
 import { setupWorktreeContext } from './context.js';
 import { classify } from './statusClassifier.js';
@@ -16,6 +17,28 @@ import type { SessionMeta, SessionStatus } from '../shared/protocol.js';
 
 const REPLAY_MAX = 256 * 1024;
 const COPILOT_SESSION_ID_RE = /session[ _-]?id[:=]\s*([0-9a-f-]{8,})/i;
+
+/**
+ * Whitelist for the cmd[] passed to pty.spawn. Only the configured Copilot
+ * binary is allowed, with a small set of safe args. Anything else is rejected
+ * — this prevents RCE via a forged WebSocket message setting cmd=['rm','-rf','/'].
+ */
+function validateCmd(cmd: string[]): { ok: true } | { ok: false; reason: string } {
+  if (!Array.isArray(cmd) || cmd.length === 0) {
+    return { ok: false, reason: 'cmd must be a non-empty array' };
+  }
+  const [bin, ...args] = cmd;
+  if (bin !== DEFAULTS.copilotBin) {
+    return { ok: false, reason: `bin must be ${DEFAULTS.copilotBin} (got ${JSON.stringify(bin)})` };
+  }
+  for (const a of args) {
+    if (typeof a !== 'string') return { ok: false, reason: 'all args must be strings' };
+    if (a === '--continue') continue;
+    if (/^--resume=[A-Za-z0-9_-]+$/.test(a)) continue;
+    return { ok: false, reason: `arg not allowed: ${JSON.stringify(a)}` };
+  }
+  return { ok: true };
+}
 
 function repoToplevelSafe(p: string): string {
   try { return repoToplevel(p); } catch { return p; }
@@ -64,6 +87,8 @@ const RESUME_PROMPT_RE = /Session in use|Resume anyway/i;
 
 class SessionManager extends EventEmitter {
   private sessions = new Map<string, Internal>();
+  /** Resolves once a session's onExit handler completes. Used by shutdownAll. */
+  private exitPromises = new Map<string, Promise<void>>();
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => ({ ...s.meta }));
@@ -94,6 +119,14 @@ class SessionManager extends EventEmitter {
     const id = randomUUID();
     let cwd = opts.cwd ?? process.cwd();
     const cmd = opts.cmd && opts.cmd.length > 0 ? opts.cmd : [DEFAULTS.copilotBin];
+    const cmdCheck = validateCmd(cmd);
+    if (!cmdCheck.ok) throw new Error(`cmd rejected: ${cmdCheck.reason}`);
+
+    const liveCount = [...this.sessions.values()].filter((s) => s.pty != null).length;
+    if (liveCount >= LIMITS.MAX_LIVE_SESSIONS) {
+      throw new Error(`max live sessions reached (${LIMITS.MAX_LIVE_SESSIONS}); close one and try again`);
+    }
+
     const [bin, ...args] = cmd;
 
     let repoPath: string | null = null;
@@ -208,6 +241,10 @@ class SessionManager extends EventEmitter {
     const meta = internal.meta;
     const proc = internal.pty;
 
+    // Track this session's eventual onExit completion so shutdownAll can await it.
+    let resolveExit!: () => void;
+    this.exitPromises.set(id, new Promise<void>((r) => { resolveExit = r; }));
+
     proc.onData((chunk) => {
       const buf = Buffer.from(chunk, 'utf8');
       appendPty(id, buf);
@@ -288,6 +325,8 @@ class SessionManager extends EventEmitter {
       closeSessionLogs(id);
       // Keep the entry in the map so it's resumable. Just drop the live pty.
       internal.pty = null;
+      this.exitPromises.delete(id);
+      resolveExit();
     });
   }
 
@@ -306,11 +345,20 @@ class SessionManager extends EventEmitter {
     }
 
     // Build cmd: base bin + --resume=<copilotId> if known else --continue.
-    const baseBin = (meta.cmd && meta.cmd[0]) || DEFAULTS.copilotBin;
-    const resumeArg = meta.copilotSessionId
+    // Force the bin back to the trusted DEFAULTS.copilotBin in case a stale
+    // DB row has something else stored.
+    const baseBin = DEFAULTS.copilotBin;
+    const resumeArg = meta.copilotSessionId && /^[A-Za-z0-9_-]+$/.test(meta.copilotSessionId)
       ? `--resume=${meta.copilotSessionId}`
       : '--continue';
     const cmd = [baseBin, resumeArg];
+    const check = validateCmd(cmd);
+    if (!check.ok) throw new Error(`resume cmd rejected: ${check.reason}`);
+
+    const liveCount = [...this.sessions.values()].filter((x) => x.pty != null).length;
+    if (liveCount >= LIMITS.MAX_LIVE_SESSIONS) {
+      throw new Error(`max live sessions reached (${LIMITS.MAX_LIVE_SESSIONS})`);
+    }
 
     logEvent(id, 'session.resuming', { cmd, worktreePath: meta.worktreePath });
     const proc = this.spawnPty(baseBin, [resumeArg], meta.worktreePath, meta.worktreePath);
@@ -448,11 +496,25 @@ class SessionManager extends EventEmitter {
     this.emit('status', { id, status });
   }
 
-  shutdownAll(): void {
-    for (const s of this.sessions.values()) {
+  /**
+   * Kill all live PTYs and wait for their onExit handlers (which run
+   * saveWorktreeWork → may commit + push) to complete, up to a grace window.
+   * Resolves either when every pending handler is done, or when the grace
+   * timeout hits — whichever comes first.
+   */
+  async shutdownAll(graceMs: number = LIMITS.SHUTDOWN_GRACE_MS): Promise<void> {
+    const pending: Promise<void>[] = [];
+    for (const [id, s] of this.sessions.entries()) {
       if (!s.pty) continue;
+      const p = this.exitPromises.get(id);
+      if (p) pending.push(p);
       try { s.pty.kill(); } catch { /* ignore */ }
     }
+    if (pending.length === 0) return;
+    await Promise.race([
+      Promise.all(pending).then(() => undefined),
+      new Promise<void>((r) => setTimeout(r, graceMs)),
+    ]);
   }
 }
 

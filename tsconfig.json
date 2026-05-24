@@ -14,5 +14,5 @@
     "types": ["node"],
     "allowImportingTsExtensions": false
   },
-  "include": ["src/**/*", "scripts/**/*"]
+  "include": ["src/**/*", "scripts/**/*", "test/**/*"]
 }

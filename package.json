@@ -9,7 +9,8 @@
     "dev": "node --watch --import tsx src/server/index.ts",
     "start": "node --import tsx src/server/index.ts",
     "build:web": "node scripts/build-web.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "MINIONHQ_HOME=$(mktemp -d) node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "esbuild": "^0.24.0",

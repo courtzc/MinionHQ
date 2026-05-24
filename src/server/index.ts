@@ -10,6 +10,8 @@ import { db, closeDb } from './db.js';
 import { ensureDirs, DEFAULTS } from './paths.js';
 import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
+import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
+import { LIMITS } from './limits.js';
 import {
   ensureRepoContext,
   listRepoContextFiles,
@@ -182,31 +184,23 @@ const httpServer = createServer(async (req, res) => {
   //   prompt — optional initial prompt to type once Copilot is ready
   // Returns { ok, id, branch, worktreePath, repoPath }.
   if (url.pathname === '/api/intent/create-session' && req.method === 'POST') {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    const chunks: Buffer[] = [];
-    req.on('data', (c) => chunks.push(c as Buffer));
-    req.on('end', () => {
+    (async () => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as {
+        const body = await readJsonBody<{
           repo?: string; branch?: string; base?: string; prompt?: string;
-        };
+        }>(req);
         if (!body.repo || !body.repo.trim()) {
-          res.statusCode = 400;
-          return res.end(JSON.stringify({ ok: false, error: 'missing repo' }));
+          return jsonErr(res, 400, 'missing repo');
         }
 
         let repoPath = body.repo.trim();
         if (!repoPath.startsWith('/') && !repoPath.startsWith('~')) {
-          // Treat as a repo name; resolve against the default discovery base.
           const { repos } = discoverRepos();
           const hit = repos.find((r) => r.name === repoPath)
                    ?? repos.find((r) => r.name.toLowerCase() === repoPath.toLowerCase());
           if (!hit) {
-            res.statusCode = 404;
-            return res.end(JSON.stringify({
-              ok: false,
-              error: `repo not found: ${repoPath}. Known: ${repos.map((r) => r.name).join(', ')}`,
-            }));
+            return jsonErr(res, 404,
+              `repo not found: ${repoPath}. Known: ${repos.map((r) => r.name).join(', ')}`);
           }
           repoPath = hit.path;
         }
@@ -229,19 +223,17 @@ const httpServer = createServer(async (req, res) => {
           }, 2500);
         }
 
-        return res.end(JSON.stringify({
-          ok: true,
+        return jsonOk(res, {
           id: meta.id,
           branch: meta.branch,
           worktreePath: meta.worktreePath,
           repoPath: meta.repoPath,
           openInBrowser: `http://${req.headers.host ?? '127.0.0.1:4242'}/#${meta.id}`,
-        }));
+        });
       } catch (e) {
-        res.statusCode = 500;
-        return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+        return jsonBodyErr(res, e);
       }
-    });
+    })();
     return;
   }
   if (url.pathname === '/api/repo/branches') {
@@ -285,39 +277,34 @@ const httpServer = createServer(async (req, res) => {
     }
   }
   if (url.pathname === '/api/repo/context/write' && req.method === 'POST') {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    const chunks: Buffer[] = [];
-    req.on('data', (c) => chunks.push(c as Buffer));
-    req.on('end', () => {
+    (async () => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
-          path?: string; name?: string; content?: string;
-        };
+        // Context files are markdown — bump the cap to 256KB to allow longer docs.
+        const body = await readJsonBody<{ path?: string; name?: string; content?: string }>(
+          req, 256 * 1024,
+        );
         if (!body.path || !body.name || body.content == null) {
-          return res.end(JSON.stringify({ ok: false, error: 'missing path/name/content' }));
+          return jsonErr(res, 400, 'missing path/name/content');
         }
         writeRepoContextFile(body.path, body.name, body.content);
-        return res.end(JSON.stringify({ ok: true }));
+        return jsonOk(res);
       } catch (e) {
-        return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+        return jsonBodyErr(res, e);
       }
-    });
+    })();
     return;
   }
   if (url.pathname === '/api/repo/context/delete' && req.method === 'POST') {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    const chunks: Buffer[] = [];
-    req.on('data', (c) => chunks.push(c as Buffer));
-    req.on('end', () => {
+    (async () => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { path?: string; name?: string };
-        if (!body.path || !body.name) return res.end(JSON.stringify({ ok: false, error: 'missing path or name' }));
+        const body = await readJsonBody<{ path?: string; name?: string }>(req);
+        if (!body.path || !body.name) return jsonErr(res, 400, 'missing path or name');
         deleteRepoContextFile(body.path, body.name);
-        return res.end(JSON.stringify({ ok: true }));
+        return jsonOk(res);
       } catch (e) {
-        return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+        return jsonBodyErr(res, e);
       }
-    });
+    })();
     return;
   }
   // ─── Sessions API ────────────────────────────────────────────────────
@@ -399,9 +386,12 @@ wss.on('connection', (ws) => {
     switch (msg.t) {
       case 'session.new': {
         try {
+          // The WS handler doesn't accept arbitrary cmd[] anymore — the
+          // server picks the bin. spawn() also validates internally, but
+          // we strip it here so an old client that sends one gets a clear
+          // server-chosen behavior instead of a reject.
           const meta = sessionManager.spawn({
             cwd: msg.cwd,
-            cmd: msg.cmd,
             repoPath: msg.repoPath,
             branchName: msg.branchName,
             baseBranch: msg.baseBranch,
@@ -480,16 +470,21 @@ httpServer.listen(DEFAULTS.port, DEFAULTS.host, () => {
 });
 
 let shuttingDown = false;
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[minionhq] ${signal} — shutting down...`);
-  sessionManager.shutdownAll();
-  closeAllLogs();
-  wss.close();
-  httpServer.close();
-  closeDb();
-  setTimeout(() => process.exit(0), 250);
+  try {
+    // Wait (up to SHUTDOWN_GRACE_MS) for all PTY onExit handlers to finish —
+    // they own the worktree auto-commit, so cutting them off loses WIP.
+    await sessionManager.shutdownAll();
+  } catch { /* ignore */ }
+  try { closeAllLogs(); } catch { /* ignore */ }
+  try { wss.close(); } catch { /* ignore */ }
+  try { httpServer.close(); } catch { /* ignore */ }
+  try { closeDb(); } catch { /* ignore */ }
+  // Small final grace so logs/db fsyncs flush before exit.
+  setTimeout(() => process.exit(0), 100);
 }
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });

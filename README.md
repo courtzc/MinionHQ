@@ -94,7 +94,16 @@ End-to-end keystroke latency on localhost is ~5ms — imperceptible vs running C
 
 ## Configuration
 
-Currently zero config — paths and port are hardcoded (`127.0.0.1:4242`, `~/.minionhq/`). Discovery looks under `~/repositories`. PRs welcome to make these `env`-configurable.
+Optional env vars (all default to sensible values):
+
+| Env var               | Default       | Purpose                              |
+| --------------------- | ------------- | ------------------------------------ |
+| `MINIONHQ_HOST`       | `127.0.0.1`   | HTTP/WS listen host                  |
+| `MINIONHQ_PORT`       | `4242`        | HTTP/WS listen port                  |
+| `MINIONHQ_COPILOT_BIN`| `copilot`     | Path to the Copilot CLI binary       |
+| `MINIONHQ_HOME`       | `~/.minionhq` | Data dir (db, logs, worktrees, repo context) |
+
+Repo discovery looks under `~/repositories`.
 
 ## Status
 
