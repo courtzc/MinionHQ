@@ -30,15 +30,15 @@ export interface ParsedIntent {
 
 const CHATTER = new Set<string>([
   'a','an','the','please','pls','can','you','make','me','i','want','need','wanted',
-  'new','create','start','spawn','open','fire','up','let','lets','let\'s','for','us',
+  'new','branch','create','start','spawn','open','fire','let','lets','let\'s','for','us',
   'to','some','do','of','in','on','at','with','and','&','session','sesh',
-  'branch','tab','copilot','off','from','about','around','that','will','would','should',
+  'tab','off','from','about','around','that','will','would','should',
   'this','it','one','please.','please,','then','also','now','today',
 ]);
 
 // Conventional-commit / common prefix detection from verbs and keywords.
-// First matching pattern wins. The matched word is stripped from the slug
-// so we don't get "fix/fix-the-bug".
+// First matching pattern wins. We keep the matched word in the slug so the
+// branch name reads naturally — "fix/fix-chime-throttle" is fine.
 const PREFIX_PATTERNS: Array<{ prefix: string; re: RegExp }> = [
   { prefix: 'fix',      re: /\b(fix(?:es|ed|ing)?|bug|broken|hotfix|repair(?:s|ed|ing)?|patch(?:es|ed|ing)?|debug(?:ging)?)\b/i },
   { prefix: 'docs',     re: /\b(doc|docs|document(?:s|ed|ing|ation)?|readme|comment(?:s|ed|ing)?)\b/i },
@@ -111,10 +111,10 @@ function scoreRepoMatch(phrase: string, repoName: string): { score: number; matc
 
 function slugifyIntent(text: string): string {
   const tokens = tokenize(text).filter((t) => !CHATTER.has(t));
-  // Keep first ~4 meaningful tokens for a short branch name.
-  const kept = tokens.slice(0, 4);
+  // Keep up to ~6 meaningful tokens for an informative branch name.
+  const kept = tokens.slice(0, 6);
   const joined = kept.join('-').replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
-  return joined.slice(0, 40);
+  return joined.slice(0, 50);
 }
 
 function detectPrefix(text: string): { prefix: string; matched: string } {
@@ -170,16 +170,20 @@ export function parseIntent(phrase: string, repos: RepoCandidate[]): ParsedInten
     remainder = remainder.replace(hint.re, ' ');
   }
 
-  // 4. Pick a prefix — explicit overrides heuristic. Strip the trigger.
-  const detected = explicitPrefix(raw) ?? detectPrefix(raw);
+  // 4. Pick a prefix — explicit overrides heuristic.
+  //    Explicit prefixes like "chore/rename" get stripped from the slug
+  //    (otherwise we'd duplicate the literal "chore/" in the branch name).
+  //    Heuristic verbs are left in place — "fix/fix-chime-throttle" reads
+  //    more naturally than "fix/chime-throttle" for a one-glance branch name.
+  const explicit = explicitPrefix(raw);
+  const detected = explicit ?? detectPrefix(raw);
   const prefix = detected.prefix;
-  if (detected.matched) {
-    const re = new RegExp(detected.matched.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  if (explicit && explicit.matched) {
+    const re = new RegExp(explicit.matched.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     remainder = remainder.replace(re, ' ');
   }
 
-  // 5. Slugify. If stripping the verb left us empty, fall back to the
-  //    matched verb (e.g. "write tests" → test/tests).
+  // 5. Slugify. Fall back to the matched verb if everything got stripped.
   const slug = slugifyIntent(remainder) || slugifyIntent(detected.matched) || 'session';
   const branchName = `${prefix}/${slug}`;
 
