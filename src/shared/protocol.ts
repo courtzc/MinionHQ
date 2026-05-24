@@ -11,6 +11,9 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   title?: string | null;
+  repoPath?: string | null;
+  worktreePath?: string | null;
+  branch?: string | null;
 }
 
 export type ServerMsg =
@@ -23,7 +26,7 @@ export type ServerMsg =
   | { t: 'error'; id?: string; message: string };
 
 export type ClientMsg =
-  | { t: 'session.new'; cwd?: string; cmd?: string[] }
+  | { t: 'session.new'; cwd?: string; cmd?: string[]; repoPath?: string; branchName?: string; baseBranch?: string }
   | { t: 'session.attach'; id: string }
   | { t: 'session.close'; id: string }
   | { t: 'pty.input'; id: string; data: string }

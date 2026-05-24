@@ -19,7 +19,10 @@
   <footer class="status">
     <span id="conn-state">connecting…</span>
     <span class="spacer"></span>
-    <span id="hint">⌘T new · ⌘W close · ⌘1..9 switch · ⌘R raw mode</span>
+    <button class="toggle" id="toggle-chimes" data-on="1" title="play chimes on status changes">🔔 chimes</button>
+    <button class="toggle" id="toggle-notify" data-on="1" title="OS notifications on status changes">📨 notify</button>
+    <span class="sep">·</span>
+    <span id="hint">⌘T new · ⌘W close · ⌘1..9 switch</span>
   </footer>
   <script type="module" src="/app.js"></script>
 </body>

@@ -9,6 +9,21 @@ import { sessionManager } from './sessions.js';
 import { db, closeDb } from './db.js';
 import { ensureDirs, DEFAULTS } from './paths.js';
 import { closeAllLogs } from './logs.js';
+import { isGitRepo, repoToplevel, listBranches, currentBranch } from './worktrees.js';
+import {
+  ensureRepoContext,
+  listRepoContextFiles,
+  readRepoContextFile,
+  writeRepoContextFile,
+  deleteRepoContextFile,
+} from './context.js';
+import {
+  BIN_PTY_DATA,
+  BIN_PTY_INPUT,
+  BIN_HEADER_SIZE,
+  uuidToBytes,
+  bytesToUuid,
+} from '../shared/binProtocol.js';
 import {
   PROTOCOL_VERSION,
   type ClientMsg,
@@ -44,8 +59,22 @@ function send(ws: WebSocket, msg: ServerMsg) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
 
+function sendPtyDataBinary(ws: WebSocket, sessionId: string, payload: Buffer) {
+  if (ws.readyState !== ws.OPEN) return;
+  const frame = Buffer.allocUnsafe(BIN_HEADER_SIZE + payload.length);
+  frame[0] = BIN_PTY_DATA;
+  uuidToBytes(sessionId, frame, 1);
+  payload.copy(frame, BIN_HEADER_SIZE);
+  ws.send(frame, { binary: true });
+}
+
 const wsAttachments = new WeakMap<WebSocket, Map<string, () => void>>();
 const attachedSockets = new Map<string, Set<WebSocket>>();
+const allSockets = new Set<WebSocket>();
+
+function broadcast(msg: ServerMsg) {
+  for (const ws of allSockets) send(ws, msg);
+}
 
 function tryServeFile(absPath: string) {
   if (!existsSync(absPath)) return null;
@@ -127,6 +156,82 @@ const httpServer = createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.end(JSON.stringify({ ok: true, protocolVersion: PROTOCOL_VERSION }));
   }
+  if (url.pathname === '/api/repo/branches') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const p = url.searchParams.get('path') ?? '';
+    if (!p) return res.end(JSON.stringify({ ok: false, error: 'missing path' }));
+    if (!isGitRepo(p)) return res.end(JSON.stringify({ ok: false, error: 'not a git repo' }));
+    try {
+      const top = repoToplevel(p);
+      const branches = listBranches(top);
+      const current = currentBranch(top);
+      return res.end(JSON.stringify({ ok: true, repoPath: top, branches, current }));
+    } catch (e) {
+      return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+    }
+  }
+
+  // ─── Repo central-context API ───────────────────────────────────────────
+  if (url.pathname === '/api/repo/context/list') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const p = url.searchParams.get('path') ?? '';
+    if (!p) return res.end(JSON.stringify({ ok: false, error: 'missing path' }));
+    try {
+      const info = ensureRepoContext(p);
+      const files = listRepoContextFiles(p);
+      return res.end(JSON.stringify({ ok: true, key: info.key, centralDir: info.centralDir, files }));
+    } catch (e) {
+      return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+    }
+  }
+  if (url.pathname === '/api/repo/context/read') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const p = url.searchParams.get('path') ?? '';
+    const name = url.searchParams.get('name') ?? '';
+    if (!p || !name) return res.end(JSON.stringify({ ok: false, error: 'missing path or name' }));
+    try {
+      const content = readRepoContextFile(p, name);
+      return res.end(JSON.stringify({ ok: true, name, content }));
+    } catch (e) {
+      return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+    }
+  }
+  if (url.pathname === '/api/repo/context/write' && req.method === 'POST') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c as Buffer));
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          path?: string; name?: string; content?: string;
+        };
+        if (!body.path || !body.name || body.content == null) {
+          return res.end(JSON.stringify({ ok: false, error: 'missing path/name/content' }));
+        }
+        writeRepoContextFile(body.path, body.name, body.content);
+        return res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+      }
+    });
+    return;
+  }
+  if (url.pathname === '/api/repo/context/delete' && req.method === 'POST') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c as Buffer));
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { path?: string; name?: string };
+        if (!body.path || !body.name) return res.end(JSON.stringify({ ok: false, error: 'missing path or name' }));
+        deleteRepoContextFile(body.path, body.name);
+        return res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+      }
+    });
+    return;
+  }
   if (url.pathname === '/app.js') {
     const code = await bundleApp();
     res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
@@ -151,14 +256,14 @@ function attach(ws: WebSocket, sessionId: string) {
   if (existing) { try { existing(); } catch { /* ignore */ } }
   try {
     const { replay, unsubscribe } = sessionManager.attach(sessionId, (buf) => {
-      send(ws, { t: 'pty.data', id: sessionId, data: buf.toString('base64') });
+      sendPtyDataBinary(ws, sessionId, buf);
     });
     map.set(sessionId, unsubscribe);
     let bucket = attachedSockets.get(sessionId);
     if (!bucket) { bucket = new Set(); attachedSockets.set(sessionId, bucket); }
     bucket.add(ws);
     if (replay.length > 0) {
-      send(ws, { t: 'pty.data', id: sessionId, data: replay.toString('base64') });
+      sendPtyDataBinary(ws, sessionId, replay);
     }
   } catch (e) {
     send(ws, { t: 'error', id: sessionId, message: (e as Error).message });
@@ -167,13 +272,31 @@ function attach(ws: WebSocket, sessionId: string) {
 
 wss.on('connection', (ws) => {
   wsAttachments.set(ws, new Map());
+  allSockets.add(ws);
   send(ws, { t: 'hello', protocolVersion: PROTOCOL_VERSION });
   send(ws, { t: 'session.list', sessions: sessionManager.list() });
 
-  ws.on('message', (raw) => {
+  ws.on('message', (raw, isBinary) => {
+    // Binary frame: PTY input on the hot path. Decode header + forward.
+    if (isBinary) {
+      const buf = raw as Buffer;
+      if (buf.length < BIN_HEADER_SIZE) return;
+      const tag = buf[0];
+      if (tag === BIN_PTY_INPUT) {
+        try {
+          const sessionId = bytesToUuid(buf, 1);
+          const payload = buf.subarray(BIN_HEADER_SIZE);
+          sessionManager.input(sessionId, payload);
+        } catch (e) {
+          send(ws, { t: 'error', message: `binary input failed: ${(e as Error).message}` });
+        }
+      }
+      return;
+    }
+
     let msg: ClientMsg;
     try {
-      msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
+      msg = JSON.parse(typeof raw === 'string' ? raw : (raw as Buffer).toString('utf8'));
     } catch {
       send(ws, { t: 'error', message: 'invalid JSON' });
       return;
@@ -181,8 +304,14 @@ wss.on('connection', (ws) => {
     switch (msg.t) {
       case 'session.new': {
         try {
-          const meta = sessionManager.spawn({ cwd: msg.cwd, cmd: msg.cmd });
-          send(ws, { t: 'session.created', session: meta });
+          const meta = sessionManager.spawn({
+            cwd: msg.cwd,
+            cmd: msg.cmd,
+            repoPath: msg.repoPath,
+            branchName: msg.branchName,
+            baseBranch: msg.baseBranch,
+          });
+          broadcast({ t: 'session.created', session: meta });
           attach(ws, meta.id);
         } catch (e) {
           send(ws, { t: 'error', message: `spawn failed: ${(e as Error).message}` });
@@ -196,6 +325,7 @@ wss.on('connection', (ws) => {
         sessionManager.close(msg.id);
         break;
       case 'pty.input':
+        // Legacy JSON path — kept for compatibility but binary frames are preferred.
         try {
           const data = Buffer.from(msg.data, 'base64');
           sessionManager.input(msg.id, data);
@@ -220,6 +350,7 @@ wss.on('connection', (ws) => {
       }
     }
     wsAttachments.delete(ws);
+    allSockets.delete(ws);
   });
 });
 
@@ -233,9 +364,9 @@ sessionManager.on('exit', ({ id, exitCode, signal }: { id: string; exitCode: num
 });
 
 sessionManager.on('status', ({ id, status }: { id: string; status: SessionStatus }) => {
-  const msg: ServerMsg = { t: 'session.status', id, status };
-  const bucket = attachedSockets.get(id);
-  if (bucket) for (const ws of bucket) send(ws, msg);
+  // Broadcast status to all sockets so the tab list / chime engine can react
+  // even when the user isn't actively attached to the tab.
+  broadcast({ t: 'session.status', id, status });
 });
 
 httpServer.listen(DEFAULTS.port, DEFAULTS.host, () => {

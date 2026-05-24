@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   copilot_session_id TEXT,
   branch TEXT,
   worktree_path TEXT,
+  repo_path TEXT,
   cwd TEXT,
   cmd TEXT,
   status TEXT NOT NULL DEFAULT 'spawning',
@@ -70,6 +71,12 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_kind ON telemetry(kind);
 
 function migrate(d: DatabaseSync) {
   d.exec(SCHEMA_V1);
+  // Lightweight ALTER migrations for existing DBs created from an earlier schema.
+  const cols = d.prepare("PRAGMA table_info(sessions)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('repo_path')) {
+    try { d.exec('ALTER TABLE sessions ADD COLUMN repo_path TEXT'); } catch { /* ignore */ }
+  }
   const row = d
     .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
     .get() as { version: number } | undefined;

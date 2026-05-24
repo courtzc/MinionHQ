@@ -141,8 +141,23 @@ main#panes {
   padding: 4px 10px;
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 .status .spacer { flex: 1; }
+.status .sep { color: var(--border); }
+.status .toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+  font-size: 11px;
+}
+.status .toggle:hover { color: var(--fg); }
+.status .toggle[data-on="1"] { color: var(--accent); border-color: var(--accent); }
+.status .toggle[data-on="0"] { opacity: 0.5; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -168,3 +183,101 @@ main#panes {
   cursor: pointer;
   font: inherit;
 }
+
+/* ─── new-session modal ─── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  width: 520px;
+  max-width: 92vw;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.modal h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.modal label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.modal label > span { display: block; }
+.modal label em {
+  font-style: normal;
+  color: var(--fg-dim);
+  opacity: 0.7;
+  font-size: 11px;
+  margin-left: 4px;
+}
+.modal input, .modal select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.modal input:focus, .modal select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.modal select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.modal .repo-status {
+  font-size: 11px;
+  margin-top: 2px;
+  min-height: 14px;
+}
+.modal .repo-status.ok    { color: var(--green); }
+.modal .repo-status.warn  { color: var(--yellow); }
+.modal .repo-status.checking { color: var(--fg-dim); }
+.modal .hint {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin: 4px 0 0 0;
+  line-height: 1.5;
+}
+.modal .hint code {
+  background: var(--bg-3);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 8px;
+}
+.modal-actions button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.modal-actions .ghost {
+  background: transparent;
+  color: var(--fg-dim);
+}
+.modal-actions .ghost:hover { color: var(--fg); border-color: var(--fg-dim); }
+.modal-actions .primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.modal-actions .primary:hover { filter: brightness(1.1); }
