@@ -49,7 +49,18 @@ interface Internal {
   pty: IPty | null;
   replay: RingBuffer;
   subscribers: Set<(buf: Buffer) => void>;
+  /** Set after resume(); listens for Copilot's "Session in use" prompt and auto-answers. */
+  resumeAutoAnswer?: {
+    scanned: number;       // bytes scanned so far
+    deadline: number;      // ms epoch after which we give up
+    text: string;          // accumulated text for cross-chunk regex matching
+    answered: boolean;     // already pressed Enter
+  };
 }
+
+const RESUME_AUTOANSWER_MAX_BYTES = 32 * 1024;
+const RESUME_AUTOANSWER_MAX_MS = 8000;
+const RESUME_PROMPT_RE = /Session in use|Resume anyway/i;
 
 class SessionManager extends EventEmitter {
   private sessions = new Map<string, Internal>();
@@ -202,6 +213,27 @@ class SessionManager extends EventEmitter {
       appendPty(id, buf);
       internal.replay.append(buf);
 
+      // ─── Auto-answer Copilot's "Session in use" resume prompt.
+      const raa = internal.resumeAutoAnswer;
+      if (raa && !raa.answered) {
+        raa.scanned += buf.length;
+        raa.text += buf.toString('utf8');
+        // Cap accumulated text to keep regex cheap.
+        if (raa.text.length > RESUME_AUTOANSWER_MAX_BYTES) {
+          raa.text = raa.text.slice(-RESUME_AUTOANSWER_MAX_BYTES);
+        }
+        const expired = Date.now() > raa.deadline || raa.scanned > RESUME_AUTOANSWER_MAX_BYTES;
+        if (RESUME_PROMPT_RE.test(raa.text)) {
+          raa.answered = true;
+          // Default highlight is option 1 ("Resume anyway") — Enter selects it.
+          try { proc.write('\r'); } catch { /* ignore */ }
+          logEvent(id, 'session.resume_autoanswered', {});
+          internal.resumeAutoAnswer = undefined;
+        } else if (expired) {
+          internal.resumeAutoAnswer = undefined;
+        }
+      }
+
       if (!meta.copilotSessionId) {
         const text = buf.toString('utf8');
         const m = text.match(COPILOT_SESSION_ID_RE);
@@ -285,6 +317,12 @@ class SessionManager extends EventEmitter {
 
     s.pty = proc;
     s.replay = new RingBuffer(REPLAY_MAX);
+    s.resumeAutoAnswer = {
+      scanned: 0,
+      deadline: Date.now() + RESUME_AUTOANSWER_MAX_MS,
+      text: '',
+      answered: false,
+    };
     meta.status = 'spawning';
     meta.dormant = false;
     meta.cmd = cmd;

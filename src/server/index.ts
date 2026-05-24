@@ -221,7 +221,9 @@ const httpServer = createServer(async (req, res) => {
 
         if (body.prompt && body.prompt.trim()) {
           // Wait briefly for Copilot to render its prompt before injecting.
-          const text = body.prompt.trim() + '\n';
+          // Use \r (TUI Enter) so the prompt auto-submits instead of
+          // sitting as a literal newline in Copilot's input box.
+          const text = body.prompt.trim() + '\r';
           setTimeout(() => {
             try { sessionManager.input(meta.id, Buffer.from(text, 'utf8')); } catch { /* ignore */ }
           }, 2500);
