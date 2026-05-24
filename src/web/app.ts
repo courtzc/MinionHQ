@@ -240,17 +240,21 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     t = { meta, term, fit, tabEl, paneEl };
     tabs.set(meta.id, t);
 
-    // attach is implicit on session.created (server auto-attaches); for pre-existing list, send attach
-    if (!makeActive) {
-      sendMsg({ t: 'session.attach', id: meta.id });
-    }
+    // Subscribe to the session's PTY stream. Always send attach — the server
+    // is idempotent (re-attaching cleans up any prior subscription). Sessions
+    // can be created via WS (session.new) OR via the HTTP intent endpoint, so
+    // we can't assume the server has already attached us.
+    sendMsg({ t: 'session.attach', id: meta.id });
 
     // refit on container resize
     new ResizeObserver(() => {
       try { t!.fit.fit(); } catch { /* ignore */ }
     }).observe(termWrap);
   }
-  if (makeActive) activate(meta.id);
+  // Activate the new tab when requested OR when there's no active tab yet
+  // (e.g. page just loaded with existing sessions, or a session was created
+  // via the HTTP intent endpoint before any browser was connected).
+  if (makeActive || activeId == null) activate(meta.id);
 }
 
 function activate(id: string) {
