@@ -752,21 +752,42 @@ function setCtxStatus(text: string, cls: 'ok' | 'err' | '' = ''): void {
   }
 }
 
-async function openCtxDrawer(): Promise<void> {
-  if (!ctxDrawer) return;
-  ctxDrawer.setAttribute('aria-hidden', 'false');
+async function refreshCtxList(): Promise<void> {
   const repo = activeRepoPath();
   if (!repo) {
-    if (ctxMeta) ctxMeta.textContent = 'No active repo. Open a session first, or set a repo via "+ new".';
-    if (ctxList) ctxList.innerHTML = '<div class="ctx-empty">No repo selected.</div>';
+    if (ctxMeta) ctxMeta.textContent = 'No active repo. Open a session first.';
+    if (ctxList) ctxList.innerHTML = '<div class="ctx-empty">No repo selected. Open a session to view its central context.</div>';
+    ctxFiles = [];
     return;
   }
   await loadCtxList(repo);
 }
 
+async function openCtxDrawer(): Promise<void> {
+  if (!ctxDrawer) return;
+  ctxDrawer.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('drawer-open');
+  // Resize the active terminal so it fits the new (narrower) pane width.
+  // requestAnimationFrame lets the CSS transition settle before measuring.
+  requestAnimationFrame(() => {
+    if (activeId) {
+      const t = tabs.get(activeId);
+      try { t?.fit.fit(); } catch { /* ignore */ }
+    }
+  });
+  await refreshCtxList();
+}
+
 function closeCtxDrawer(): void {
   if (!ctxDrawer) return;
   ctxDrawer.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('drawer-open');
+  requestAnimationFrame(() => {
+    if (activeId) {
+      const t = tabs.get(activeId);
+      try { t?.fit.fit(); } catch { /* ignore */ }
+    }
+  });
 }
 
 async function loadCtxList(repo: string): Promise<void> {
@@ -781,7 +802,7 @@ async function loadCtxList(repo: string): Promise<void> {
       ctxList.innerHTML = '';
       return;
     }
-    ctxMeta.innerHTML = `<div><strong>repo:</strong> ${repo}</div><div><strong>central:</strong> ${data.centralDir}</div>`;
+    ctxMeta.innerHTML = `<div><strong>repo:</strong> ${escapeHtml(repo)}</div><div><strong>central:</strong> ${escapeHtml(data.centralDir ?? '')}</div><div class="ctx-hint">Shared across every session on this repo (any branch). Sessions also auto-write transcripts here.</div>`;
     ctxFiles = data.files ?? [];
     renderCtxList();
   } catch (e) {
@@ -799,14 +820,14 @@ function renderCtxList(): void {
   for (const f of ctxFiles) {
     const item = document.createElement('div');
     item.className = 'ctx-item' + (f.name === ctxCurrentFile ? ' active' : '');
-    item.innerHTML = `<span>${f.name}</span><span class="size">${f.size}b</span>`;
+    item.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
     item.addEventListener('click', () => { void loadCtxFile(f.name); });
     ctxList.appendChild(item);
   }
 }
 
 async function loadCtxFile(name: string): Promise<void> {
-  if (!ctxCurrentRepo || !ctxFilename || !ctxContent) return;
+  if (!ctxFilename || !ctxContent || !ctxCurrentRepo) return;
   try {
     const res = await fetch(`/api/repo/context/read?path=${encodeURIComponent(ctxCurrentRepo)}&name=${encodeURIComponent(name)}`);
     const data = await res.json() as { ok: boolean; content?: string; error?: string };
@@ -822,10 +843,11 @@ async function loadCtxFile(name: string): Promise<void> {
 }
 
 async function saveCtxFile(): Promise<void> {
-  if (!ctxCurrentRepo || !ctxFilename || !ctxContent) return;
+  if (!ctxFilename || !ctxContent) return;
   const name = ctxFilename.value.trim();
   if (!name) { setCtxStatus('filename required', 'err'); return; }
   if (!/\.md$/i.test(name)) { setCtxStatus('must end in .md', 'err'); return; }
+  if (!ctxCurrentRepo) { setCtxStatus('no repo selected', 'err'); return; }
   setCtxStatus('saving…');
   try {
     const res = await fetch('/api/repo/context/write', {
@@ -837,14 +859,14 @@ async function saveCtxFile(): Promise<void> {
     if (!data.ok) { setCtxStatus(data.error ?? 'save failed', 'err'); return; }
     setCtxStatus('saved ✓', 'ok');
     ctxCurrentFile = name;
-    await loadCtxList(ctxCurrentRepo);
+    await refreshCtxList();
   } catch (e) {
     setCtxStatus((e as Error).message, 'err');
   }
 }
 
 async function deleteCtxFile(): Promise<void> {
-  if (!ctxCurrentRepo || !ctxCurrentFile) return;
+  if (!ctxCurrentFile || !ctxCurrentRepo) return;
   if (!confirm(`Delete ${ctxCurrentFile}? This affects every session on this repo.`)) return;
   try {
     const res = await fetch('/api/repo/context/delete', {
@@ -858,7 +880,7 @@ async function deleteCtxFile(): Promise<void> {
     if (ctxContent) ctxContent.value = '';
     ctxCurrentFile = null;
     setCtxStatus('deleted', 'ok');
-    await loadCtxList(ctxCurrentRepo);
+    await refreshCtxList();
   } catch (e) {
     setCtxStatus((e as Error).message, 'err');
   }

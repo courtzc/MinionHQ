@@ -6,11 +6,11 @@ import { join } from 'node:path';
 import pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { db } from './db.js';
-import { appendPty, closeSessionLogs, logEvent } from './logs.js';
+import { appendPty, closeSessionLogs, logEvent, registerTranscriptSink } from './logs.js';
 import { DEFAULTS } from './paths.js';
 import { LIMITS } from './limits.js';
 import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
-import { setupWorktreeContext } from './context.js';
+import { setupWorktreeContext, appendTranscriptIndex } from './context.js';
 import { classify } from './statusClassifier.js';
 import { RingBuffer } from './ringBuffer.js';
 import type { SessionMeta, SessionStatus } from '../shared/protocol.js';
@@ -157,6 +157,20 @@ class SessionManager extends EventEmitter {
             branch: wt.branch,
           });
           logEvent(id, 'context.setup', { agentsPath: ctx.agentsPath, centralDir: ctx.centralDir });
+          // Register the per-repo transcript sink so all PTY output for this
+          // session also lands in ~/.minionhq/repos/<key>/transcripts/<id>.log
+          // (visible from every worktree of this repo via the symlink).
+          registerTranscriptSink({
+            sessionId: id,
+            transcriptsDir: ctx.transcriptsDir,
+            branch: wt.branch,
+          });
+          appendTranscriptIndex({
+            repoRealPath: wt.repoPath,
+            sessionId: id,
+            branch: wt.branch,
+            startedAt: Date.now(),
+          });
         } catch (e) {
           logEvent(id, 'context.setup_failed', { message: (e as Error).message });
         }
@@ -375,6 +389,25 @@ class SessionManager extends EventEmitter {
     meta.dormant = false;
     meta.cmd = cmd;
     meta.updatedAt = Date.now();
+
+    // Re-register the per-repo transcript sink so resumed sessions continue
+    // appending into the same archive file (with a "resumed at" marker).
+    if (meta.repoPath) {
+      try {
+        const ctx = setupWorktreeContext({
+          worktreePath: meta.worktreePath,
+          repoRealPath: meta.repoPath,
+          branch: meta.branch ?? 'unknown',
+        });
+        registerTranscriptSink({
+          sessionId: id,
+          transcriptsDir: ctx.transcriptsDir,
+          branch: meta.branch ?? 'unknown',
+        });
+      } catch (e) {
+        logEvent(id, 'context.resume_setup_failed', { message: (e as Error).message });
+      }
+    }
 
     try {
       db().prepare(

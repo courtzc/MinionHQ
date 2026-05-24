@@ -14,6 +14,10 @@ interface Writers {
 }
 
 const writers = new Map<string, Writers>();
+// Per-session transcript sinks: a second PTY stream that writes into the
+// per-repo transcripts dir so sessions on the same repo (any worktree) can
+// `grep` across each other's output.
+const transcriptSinks = new Map<string, WriteStream>();
 
 function ensureWriters(sessionId: string): Writers {
   let w = writers.get(sessionId);
@@ -55,6 +59,53 @@ export function appendPty(sessionId: string, data: Buffer): void {
   w.pty.write(data);
   w.ptyBytes += data.length;
   rotateIfNeeded(sessionId, w);
+  // Tee into the per-repo transcripts dir (best-effort, write errors ignored).
+  const sink = transcriptSinks.get(sessionId);
+  if (sink) {
+    try { sink.write(data); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Register a per-repo transcript sink for this session. PTY output written by
+ * `appendPty` will also be appended to `<transcriptsDir>/<sessionId>.log`.
+ * Idempotent — calling twice closes the previous sink first. A short header
+ * line is written when the file is created so tail-readers know what they're
+ * looking at.
+ */
+export function registerTranscriptSink(opts: {
+  sessionId: string;
+  transcriptsDir: string;
+  branch: string;
+}): void {
+  const existing = transcriptSinks.get(opts.sessionId);
+  if (existing) {
+    try { existing.end(); } catch { /* ignore */ }
+    transcriptSinks.delete(opts.sessionId);
+  }
+  try {
+    if (!existsSync(opts.transcriptsDir)) mkdirSync(opts.transcriptsDir, { recursive: true });
+    const path = join(opts.transcriptsDir, `${opts.sessionId}.log`);
+    const fresh = !existsSync(path);
+    const stream = createWriteStream(path, { flags: 'a' });
+    if (fresh) {
+      stream.write(
+        `# minionhq transcript\n# session: ${opts.sessionId}\n# branch:  ${opts.branch}\n# started: ${new Date().toISOString()}\n\n`,
+      );
+    } else {
+      stream.write(`\n# --- resumed ${new Date().toISOString()} (branch ${opts.branch}) ---\n\n`);
+    }
+    transcriptSinks.set(opts.sessionId, stream);
+  } catch (e) {
+    console.warn(`[logs] transcript sink open failed for ${opts.sessionId}:`, (e as Error).message);
+  }
+}
+
+export function closeTranscriptSink(sessionId: string): void {
+  const sink = transcriptSinks.get(sessionId);
+  if (!sink) return;
+  try { sink.end(); } catch { /* ignore */ }
+  transcriptSinks.delete(sessionId);
 }
 
 export function logEvent(sessionId: string, kind: string, payload: unknown = null): void {
@@ -105,13 +156,16 @@ export function logTelemetry(sessionId: string, row: TelemetryRow): void {
 
 export function closeSessionLogs(sessionId: string): void {
   const w = writers.get(sessionId);
-  if (!w) return;
-  try { w.pty.end(); } catch { /* ignore */ }
-  try { w.events.end(); } catch { /* ignore */ }
-  try { w.telemetry.end(); } catch { /* ignore */ }
-  writers.delete(sessionId);
+  if (w) {
+    try { w.pty.end(); } catch { /* ignore */ }
+    try { w.events.end(); } catch { /* ignore */ }
+    try { w.telemetry.end(); } catch { /* ignore */ }
+    writers.delete(sessionId);
+  }
+  closeTranscriptSink(sessionId);
 }
 
 export function closeAllLogs(): void {
   for (const id of [...writers.keys()]) closeSessionLogs(id);
+  for (const id of [...transcriptSinks.keys()]) closeTranscriptSink(id);
 }

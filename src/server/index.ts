@@ -12,6 +12,7 @@ import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
 import { LIMITS } from './limits.js';
+import { notifyMac, isMacNotifySupported } from './macNotify.js';
 import {
   ensureRepoContext,
   listRepoContextFiles,
@@ -306,6 +307,33 @@ const httpServer = createServer(async (req, res) => {
       }
     })();
     return;
+  }
+  // Native macOS notifications. The browser POSTs here when it wants a real
+  // Notification Center toast (in addition to / instead of the browser's own
+  // Notification API which can be flaky). No-op on non-darwin platforms.
+  if (url.pathname === '/api/notify' && req.method === 'POST') {
+    (async () => {
+      try {
+        const body = await readJsonBody<{ kind?: string; sessionLabel?: string | null; body?: string; openUrl?: string }>(req);
+        const kind = body.kind;
+        if (kind !== 'needs-input' && kind !== 'done' && kind !== 'error') {
+          return jsonErr(res, 400, 'kind must be needs-input | done | error');
+        }
+        const transport = await notifyMac({
+          kind,
+          sessionLabel: body.sessionLabel ?? null,
+          body: body.body,
+          openUrl: body.openUrl,
+        });
+        return jsonOk(res, { transport });
+      } catch (e) {
+        return jsonBodyErr(res, e);
+      }
+    })();
+    return;
+  }
+  if (url.pathname === '/api/notify/capabilities') {
+    return jsonOk(res, { mac: isMacNotifySupported() });
   }
   // ─── Sessions API ────────────────────────────────────────────────────
   if (url.pathname === '/api/sessions/dormant') {

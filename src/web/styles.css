@@ -453,21 +453,27 @@ body.popout .pane { padding: 4px; }
 /* ─── Context drawer ───────────────────────────────────────────────── */
 .drawer {
   position: fixed;
-  top: 36px;
+  top: 40px;
   right: 0;
-  bottom: 22px;
-  width: 480px;
-  max-width: 90vw;
+  bottom: 24px;
+  width: min(480px, 50vw);
   background: var(--bg-2);
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--border-strong);
   box-shadow: -4px 0 16px rgba(0,0,0,0.4);
   transform: translateX(100%);
-  transition: transform 160ms ease-out;
+  transition: transform 180ms ease-out;
   z-index: 100;
   display: flex;
   flex-direction: column;
 }
 .drawer[aria-hidden="false"] { transform: translateX(0); }
+
+/* When the drawer is open, reserve space on the right of #panes so the
+   terminal resizes around it instead of being hidden under it. Width matches
+   the drawer's own width formula. */
+body.drawer-open main#panes {
+  padding-right: min(480px, 50vw);
+}
 .drawer-head {
   display: flex;
   align-items: center;
@@ -495,6 +501,7 @@ body.popout .pane { padding: 4px; }
   border-bottom: 1px solid var(--border);
   word-break: break-all;
 }
+
 .drawer-body {
   flex: 1;
   display: grid;
