@@ -115,10 +115,16 @@ function handleServerMsg(msg: ServerMsg) {
       console.log('server protocol', msg.protocolVersion);
       break;
     case 'session.list':
-      for (const m of msg.sessions) ensureTab(m, false);
-      if (msg.sessions.length === 0 && activeId == null) renderEmpty();
+      for (const m of msg.sessions) {
+        // Dormant sessions live in the resume picker, not the main tab bar.
+        if (m.dormant) continue;
+        ensureTab(m, false);
+      }
+      if (tabs.size === 0 && activeId == null) renderEmpty();
       break;
     case 'session.created':
+      // Treat session.created as "this session is now live (or resumed)" —
+      // ensureTab is idempotent, and we want to attach even if a tab exists.
       ensureTab(msg.session, true);
       break;
     case 'session.status':
@@ -240,17 +246,22 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     t = { meta, term, fit, tabEl, paneEl };
     tabs.set(meta.id, t);
 
-    // Subscribe to the session's PTY stream. Always send attach — the server
-    // is idempotent (re-attaching cleans up any prior subscription). Sessions
-    // can be created via WS (session.new) OR via the HTTP intent endpoint, so
-    // we can't assume the server has already attached us.
-    sendMsg({ t: 'session.attach', id: meta.id });
-
     // refit on container resize
     new ResizeObserver(() => {
       try { t!.fit.fit(); } catch { /* ignore */ }
     }).observe(termWrap);
+  } else {
+    // Tab already exists — update its meta so status/branch/etc reflect the
+    // latest server-side state (covers resume: dormant → spawning).
+    t.meta = meta;
   }
+
+  // Subscribe to the session's PTY stream. Always send attach — the server
+  // is idempotent (re-attaching cleans up any prior subscription). Sessions
+  // can be created via WS (session.new), via the HTTP intent endpoint, OR
+  // via resume of a dormant session (no prior browser subscription).
+  sendMsg({ t: 'session.attach', id: meta.id });
+
   // Activate the new tab when requested OR when there's no active tab yet
   // (e.g. page just loaded with existing sessions, or a session was created
   // via the HTTP intent endpoint before any browser was connected).
@@ -470,6 +481,85 @@ function openNewSessionModal(): void {
 }
 
 newBtn.addEventListener('click', () => { unlockAudio(); openNewSessionModal(); });
+
+const resumeBtn = document.getElementById('resume-session') as HTMLButtonElement | null;
+resumeBtn?.addEventListener('click', () => { unlockAudio(); openResumePicker(); });
+
+async function openResumePicker(): Promise<void> {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <h2>resume a session</h2>
+      <div id="cm-resume-list" class="resume-list">loading…</div>
+      <p class="hint">click a session to resume it. copilot is restarted in the existing worktree with <code>--resume</code>, so the conversation history continues.</p>
+      <div class="modal-actions">
+        <button class="ghost" id="cm-resume-cancel">close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const listEl   = overlay.querySelector('#cm-resume-list') as HTMLDivElement;
+  const cancelBtn = overlay.querySelector('#cm-resume-cancel') as HTMLButtonElement;
+
+  function cleanup() { overlay.remove(); }
+  cancelBtn.addEventListener('click', cleanup);
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+  document.addEventListener('keydown', function esc(ev) {
+    if (ev.key === 'Escape') { cleanup(); document.removeEventListener('keydown', esc); }
+  });
+
+  try {
+    const r = await fetch('/api/sessions/dormant');
+    const data = await r.json() as { ok: boolean; sessions?: SessionMeta[]; error?: string };
+    if (!data.ok || !data.sessions) {
+      listEl.textContent = `error: ${data.error ?? 'unknown'}`;
+      return;
+    }
+    if (data.sessions.length === 0) {
+      listEl.innerHTML = '<div class="resume-empty">no dormant sessions. when copilot processes exit, their worktrees remain on disk and they appear here as resumable.</div>';
+      return;
+    }
+    // Group by repo name (last path segment of repoPath).
+    const groups = new Map<string, SessionMeta[]>();
+    for (const s of data.sessions) {
+      const repo = s.repoPath ? s.repoPath.split('/').pop() ?? s.repoPath : '(no repo)';
+      if (!groups.has(repo)) groups.set(repo, []);
+      groups.get(repo)!.push(s);
+    }
+    listEl.innerHTML = '';
+    for (const [repo, sessions] of groups) {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'resume-group';
+      const heading = document.createElement('div');
+      heading.className = 'resume-repo';
+      heading.textContent = repo;
+      groupEl.appendChild(heading);
+      for (const s of sessions) {
+        const row = document.createElement('button');
+        row.className = 'resume-row';
+        row.type = 'button';
+        const when = new Date(s.updatedAt).toLocaleString();
+        row.innerHTML = `
+          <div class="resume-row-main">
+            <span class="resume-branch">${escapeHtml(s.branch ?? '(no branch)')}</span>
+            <span class="resume-when">${escapeHtml(when)}</span>
+          </div>
+          <div class="resume-row-sub">${escapeHtml(s.id.slice(0, 8))} · ${s.copilotSessionId ? 'copilot session ' + escapeHtml(s.copilotSessionId.slice(0, 8)) : 'no copilot id (will use --continue)'}</div>
+        `;
+        row.addEventListener('click', () => {
+          sendMsg({ t: 'session.resume', id: s.id });
+          cleanup();
+        });
+        groupEl.appendChild(row);
+      }
+      listEl.appendChild(groupEl);
+    }
+  } catch (e) {
+    listEl.textContent = `error: ${(e as Error).message}`;
+  }
+}
 
 document.addEventListener('keydown', (ev) => {
   const meta = ev.metaKey || ev.ctrlKey;

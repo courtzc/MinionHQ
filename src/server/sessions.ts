@@ -8,7 +8,7 @@ import type { IPty } from 'node-pty';
 import { db } from './db.js';
 import { appendPty, closeSessionLogs, logEvent } from './logs.js';
 import { DEFAULTS } from './paths.js';
-import { createWorktree, saveWorktreeWork, isGitRepo } from './worktrees.js';
+import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
 import { setupWorktreeContext } from './context.js';
 import { classify } from './statusClassifier.js';
 import { RingBuffer } from './ringBuffer.js';
@@ -16,6 +16,10 @@ import type { SessionMeta, SessionStatus } from '../shared/protocol.js';
 
 const REPLAY_MAX = 256 * 1024;
 const COPILOT_SESSION_ID_RE = /session[ _-]?id[:=]\s*([0-9a-f-]{8,})/i;
+
+function repoToplevelSafe(p: string): string {
+  try { return repoToplevel(p); } catch { return p; }
+}
 
 /**
  * Pre-trust a folder by adding it to Copilot CLI's ~/.copilot/config.json
@@ -42,7 +46,7 @@ function preTrustFolder(folder: string): void {
 
 interface Internal {
   meta: SessionMeta;
-  pty: IPty;
+  pty: IPty | null;
   replay: RingBuffer;
   subscribers: Set<(buf: Buffer) => void>;
 }
@@ -60,6 +64,22 @@ class SessionManager extends EventEmitter {
   }
 
   spawn(opts: { cwd?: string; cmd?: string[]; repoPath?: string; branchName?: string; baseBranch?: string } = {}): SessionMeta {
+    // ─── Smart reuse: if a dormant session already exists for this repo+branch,
+    // resume that one instead of creating a fresh worktree with a -2 suffix.
+    if (opts.repoPath && opts.branchName) {
+      const targetRepo = isGitRepo(opts.repoPath) ? repoToplevelSafe(opts.repoPath) : opts.repoPath;
+      const wantBranch = opts.branchName.trim();
+      for (const s of this.sessions.values()) {
+        if (s.pty) continue; // skip live sessions
+        if (s.meta.branch !== wantBranch) continue;
+        if (s.meta.repoPath !== targetRepo) continue;
+        if (!s.meta.worktreePath || !existsSync(s.meta.worktreePath)) continue;
+        // Match — resume this dormant session.
+        logEvent(s.meta.id, 'session.reused', { reason: 'spawn matched dormant repo+branch' });
+        return this.resume(s.meta.id);
+      }
+    }
+
     const id = randomUUID();
     let cwd = opts.cwd ?? process.cwd();
     const cmd = opts.cmd && opts.cmd.length > 0 ? opts.cmd : [DEFAULTS.copilotBin];
@@ -102,28 +122,7 @@ class SessionManager extends EventEmitter {
       }
     }
 
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === 'string') env[k] = v;
-    }
-    // Ensure local bin is on PATH (copilot often lives in ~/.local/bin)
-    const localBin = `${homedir()}/.local/bin`;
-    if (!env.PATH?.split(':').includes(localBin)) {
-      env.PATH = `${localBin}:${env.PATH ?? ''}`;
-    }
-    env.TERM = env.TERM ?? 'xterm-256color';
-
-    // Pre-trust the worktree folder so Copilot doesn't open with a blocking
-    // "Confirm folder trust" prompt on every new session.
-    if (worktreePath) preTrustFolder(worktreePath);
-
-    const proc = pty.spawn(bin, args, {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 32,
-      cwd,
-      env,
-    });
+    const proc = this.spawnPty(bin, args, cwd, worktreePath);
 
     const now = Date.now();
     const meta: SessionMeta = {
@@ -138,6 +137,7 @@ class SessionManager extends EventEmitter {
       repoPath,
       worktreePath,
       branch,
+      dormant: false,
     };
 
     const internal: Internal = {
@@ -158,14 +158,50 @@ class SessionManager extends EventEmitter {
     }
     logEvent(id, 'session.spawned', { cwd, cmd, repoPath, worktreePath, branch });
 
+    this.wirePty(id);
+    return { ...meta };
+  }
+
+  /**
+   * Build the env + pty.spawn call. Pre-trusts the worktree folder.
+   */
+  private spawnPty(bin: string, args: string[], cwd: string, worktreePath: string | null): IPty {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (typeof v === 'string') env[k] = v;
+    }
+    const localBin = `${homedir()}/.local/bin`;
+    if (!env.PATH?.split(':').includes(localBin)) {
+      env.PATH = `${localBin}:${env.PATH ?? ''}`;
+    }
+    env.TERM = env.TERM ?? 'xterm-256color';
+
+    if (worktreePath) preTrustFolder(worktreePath);
+
+    return pty.spawn(bin, args, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 32,
+      cwd,
+      env,
+    });
+  }
+
+  /**
+   * Attach onData/onExit handlers to the PTY of the session with the given id.
+   * Called both by spawn() (fresh session) and resume() (resumed dormant session).
+   */
+  private wirePty(id: string): void {
+    const internal = this.sessions.get(id);
+    if (!internal || !internal.pty) return;
+    const meta = internal.meta;
+    const proc = internal.pty;
+
     proc.onData((chunk) => {
       const buf = Buffer.from(chunk, 'utf8');
       appendPty(id, buf);
-
-      // O(1) amortised append into a fixed-cap ring buffer.
       internal.replay.append(buf);
 
-      // Detect copilot session id (best-effort heuristic; replaced in Phase 3 parser)
       if (!meta.copilotSessionId) {
         const text = buf.toString('utf8');
         const m = text.match(COPILOT_SESSION_ID_RE);
@@ -178,7 +214,6 @@ class SessionManager extends EventEmitter {
         }
       }
 
-      // First chunk implies the process is alive and accepting output → idle
       if (meta.status === 'spawning') {
         this.setStatus(id, 'idle');
       } else {
@@ -186,7 +221,6 @@ class SessionManager extends EventEmitter {
         if (next && next !== meta.status) this.setStatus(id, next);
       }
 
-      // Fan out to subscribers
       for (const fn of internal.subscribers) {
         try { fn(buf); } catch { /* ignore */ }
       }
@@ -195,6 +229,7 @@ class SessionManager extends EventEmitter {
     proc.onExit(({ exitCode, signal }) => {
       meta.status = 'exited';
       meta.updatedAt = Date.now();
+      meta.dormant = true;
       try {
         db().prepare('UPDATE sessions SET status = ?, updated_at = ?, closed_at = ? WHERE id = ?')
           .run('exited', meta.updatedAt, meta.updatedAt, id);
@@ -202,9 +237,6 @@ class SessionManager extends EventEmitter {
       logEvent(id, 'session.exited', { exitCode, signal });
       this.emit('exit', { id, exitCode, signal: signal != null ? String(signal) : null });
 
-      // SAFETY: auto-commit any uncommitted work in the worktree so nothing
-      // the agent did is lost. The branch + worktree DIRECTORY are kept on
-      // disk; only the PTY process exits. Explicit archive is a separate op.
       if (meta.worktreePath) {
         try {
           const result = saveWorktreeWork(meta.worktreePath, id);
@@ -222,10 +254,117 @@ class SessionManager extends EventEmitter {
         }
       }
       closeSessionLogs(id);
-      this.sessions.delete(id);
+      // Keep the entry in the map so it's resumable. Just drop the live pty.
+      internal.pty = null;
     });
+  }
 
+  /**
+   * Resume a dormant session by spawning a fresh Copilot CLI process with
+   * --resume=<copilotSessionId> (or --continue if we never captured the id)
+   * in the existing worktree. Same session id, same DB row.
+   */
+  resume(id: string): SessionMeta {
+    const s = this.sessions.get(id);
+    if (!s) throw new Error(`session not found: ${id}`);
+    if (s.pty) throw new Error(`session already alive: ${id}`);
+    const meta = s.meta;
+    if (!meta.worktreePath || !existsSync(meta.worktreePath)) {
+      throw new Error(`worktree missing for session ${id}: ${meta.worktreePath ?? '(none)'}`);
+    }
+
+    // Build cmd: base bin + --resume=<copilotId> if known else --continue.
+    const baseBin = (meta.cmd && meta.cmd[0]) || DEFAULTS.copilotBin;
+    const resumeArg = meta.copilotSessionId
+      ? `--resume=${meta.copilotSessionId}`
+      : '--continue';
+    const cmd = [baseBin, resumeArg];
+
+    logEvent(id, 'session.resuming', { cmd, worktreePath: meta.worktreePath });
+    const proc = this.spawnPty(baseBin, [resumeArg], meta.worktreePath, meta.worktreePath);
+
+    s.pty = proc;
+    s.replay = new RingBuffer(REPLAY_MAX);
+    meta.status = 'spawning';
+    meta.dormant = false;
+    meta.cmd = cmd;
+    meta.updatedAt = Date.now();
+
+    try {
+      db().prepare(
+        'UPDATE sessions SET status = ?, updated_at = ?, cmd = ?, closed_at = NULL WHERE id = ?'
+      ).run('spawning', meta.updatedAt, JSON.stringify(cmd), id);
+    } catch { /* ignore */ }
+
+    this.wirePty(id);
+    this.emit('status', { id, status: 'spawning' });
     return { ...meta };
+  }
+
+  /**
+   * On boot: scan the DB for sessions whose worktree still exists on disk
+   * and register them as dormant (in-memory but no live PTY). They show up
+   * in list() so the UI can offer them in the resume picker.
+   */
+  restoreDormant(): { restored: number; skipped: number } {
+    let restored = 0;
+    let skipped = 0;
+    let rows: Array<{
+      id: string; copilot_session_id: string | null; branch: string | null;
+      worktree_path: string | null; repo_path: string | null; cwd: string;
+      cmd: string; status: string; created_at: number; updated_at: number;
+      title: string | null;
+    }> = [];
+    try {
+      rows = db().prepare(
+        `SELECT id, copilot_session_id, branch, worktree_path, repo_path, cwd, cmd,
+                status, created_at, updated_at, title
+         FROM sessions
+         WHERE worktree_path IS NOT NULL
+         ORDER BY updated_at DESC
+         LIMIT 200`
+      ).all() as typeof rows;
+    } catch (e) {
+      console.warn('[sessions] restoreDormant query failed:', (e as Error).message);
+      return { restored, skipped };
+    }
+
+    for (const row of rows) {
+      if (this.sessions.has(row.id)) { skipped++; continue; }
+      if (!row.worktree_path || !existsSync(row.worktree_path)) { skipped++; continue; }
+      let cmd: string[];
+      try { cmd = JSON.parse(row.cmd); } catch { cmd = [DEFAULTS.copilotBin]; }
+      const meta: SessionMeta = {
+        id: row.id,
+        cwd: row.cwd,
+        cmd,
+        status: 'exited',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        copilotSessionId: row.copilot_session_id,
+        title: row.title ?? row.branch ?? null,
+        repoPath: row.repo_path,
+        worktreePath: row.worktree_path,
+        branch: row.branch,
+        dormant: true,
+      };
+      this.sessions.set(row.id, {
+        meta,
+        pty: null,
+        replay: new RingBuffer(REPLAY_MAX),
+        subscribers: new Set(),
+      });
+      restored++;
+    }
+    // Best-effort: any DB row that says spawning/idle/working but isn't in our
+    // map and has no worktree → mark exited (the previous server died).
+    try {
+      db().prepare(
+        `UPDATE sessions SET status = 'exited', closed_at = COALESCE(closed_at, ?)
+         WHERE status NOT IN ('exited') AND id NOT IN (${[...this.sessions.keys()].map(() => '?').join(',') || "''"})`
+      ).run(Date.now(), ...this.sessions.keys());
+    } catch { /* ignore */ }
+    return { restored, skipped };
   }
 
   attach(id: string, onData: (buf: Buffer) => void): { replay: Buffer; unsubscribe: () => void } {
@@ -241,19 +380,20 @@ class SessionManager extends EventEmitter {
   input(id: string, data: Buffer): void {
     const s = this.sessions.get(id);
     if (!s) throw new Error(`session not found: ${id}`);
+    if (!s.pty) throw new Error(`session is dormant: ${id} — resume first`);
     s.pty.write(data.toString('utf8'));
     if (s.meta.status === 'needs-input') this.setStatus(id, 'working');
   }
 
   resize(id: string, cols: number, rows: number): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    if (!s || !s.pty) return;
     try { s.pty.resize(Math.max(2, cols), Math.max(2, rows)); } catch { /* ignore */ }
   }
 
   close(id: string): void {
     const s = this.sessions.get(id);
-    if (!s) return;
+    if (!s || !s.pty) return;
     try { s.pty.kill(); } catch { /* ignore */ }
   }
 
@@ -272,6 +412,7 @@ class SessionManager extends EventEmitter {
 
   shutdownAll(): void {
     for (const s of this.sessions.values()) {
+      if (!s.pty) continue;
       try { s.pty.kill(); } catch { /* ignore */ }
     }
   }

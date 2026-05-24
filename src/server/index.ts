@@ -34,6 +34,13 @@ import {
 ensureDirs();
 db(); // initialise + migrate
 
+// Rehydrate dormant sessions whose worktrees survived the previous server's
+// death. They'll show up in the resume picker and via smart-reuse in spawn().
+const restored = sessionManager.restoreDormant();
+if (restored.restored > 0 || restored.skipped > 0) {
+  console.log(`[copilot-multi] restored ${restored.restored} dormant session(s), skipped ${restored.skipped}`);
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
 const PUBLIC_DIR = join(PROJECT_ROOT, 'public');
@@ -311,6 +318,13 @@ const httpServer = createServer(async (req, res) => {
     });
     return;
   }
+  // ─── Sessions API ────────────────────────────────────────────────────
+  if (url.pathname === '/api/sessions/dormant') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const all = sessionManager.list();
+    const dormant = all.filter((s) => s.dormant);
+    return res.end(JSON.stringify({ ok: true, sessions: dormant }));
+  }
   if (url.pathname === '/app.js') {
     const code = await bundleApp();
     res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
@@ -399,6 +413,15 @@ wss.on('connection', (ws) => {
       }
       case 'session.attach':
         attach(ws, msg.id);
+        break;
+      case 'session.resume':
+        try {
+          const meta = sessionManager.resume(msg.id);
+          broadcast({ t: 'session.created', session: meta });
+          attach(ws, meta.id);
+        } catch (e) {
+          send(ws, { t: 'error', id: msg.id, message: `resume failed: ${(e as Error).message}` });
+        }
         break;
       case 'session.close':
         sessionManager.close(msg.id);

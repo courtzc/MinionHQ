@@ -14,6 +14,8 @@ export interface SessionMeta {
   repoPath?: string | null;
   worktreePath?: string | null;
   branch?: string | null;
+  /** True when restored from DB on boot with no live PTY. Resumable via session.resume. */
+  dormant?: boolean;
 }
 
 export type ServerMsg =
@@ -29,5 +31,6 @@ export type ClientMsg =
   | { t: 'session.new'; cwd?: string; cmd?: string[]; repoPath?: string; branchName?: string; baseBranch?: string }
   | { t: 'session.attach'; id: string }
   | { t: 'session.close'; id: string }
+  | { t: 'session.resume'; id: string }
   | { t: 'pty.input'; id: string; data: string }
   | { t: 'pty.resize'; id: string; cols: number; rows: number };

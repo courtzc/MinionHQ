@@ -444,3 +444,22 @@ main#panes {
 /* ─── modal extras ─────────────────────────────────────────────────── */
 #cm-change-base { color: var(--accent); text-decoration: none; }
 #cm-change-base:hover { text-decoration: underline; }
+
+/* ─── resume picker ──────────────────────────────────────────────── */
+.resume-list { max-height: 50vh; overflow-y: auto; margin: 8px 0; }
+.resume-empty { color: var(--fg-dim); font-size: 13px; padding: 12px; text-align: center; }
+.resume-group { margin-bottom: 16px; }
+.resume-repo {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--fg-dim); margin: 8px 4px 4px; font-weight: 600;
+}
+.resume-row {
+  width: 100%; text-align: left; padding: 8px 12px; margin: 2px 0;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--fg); cursor: pointer; display: block;
+}
+.resume-row:hover { background: var(--bg-3); border-color: var(--accent); }
+.resume-row-main { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.resume-branch { font-family: ui-monospace, monospace; font-size: 13px; color: var(--fg); }
+.resume-when { font-size: 11px; color: var(--fg-dim); }
+.resume-row-sub { font-size: 11px; color: var(--fg-dim); margin-top: 2px; }
