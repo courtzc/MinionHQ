@@ -299,7 +299,7 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     close.textContent = '×';
     close.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      if (confirm('close session?')) sendMsg({ t: 'session.close', id: meta.id });
+      if (confirm('close session?')) closeAndRemoveTab(meta.id);
     });
     tabEl.append(dot, label, pop, close);
     tabEl.addEventListener('click', () => activate(meta.id));
@@ -482,6 +482,43 @@ function popOutSession(id: string): void {
   window.open(url, `minionhq-${id}`, 'width=920,height=720,resizable=yes');
 }
 
+/**
+ * Kill the PTY for this session AND remove the tab from the UI. The session
+ * stays dormant on the server (resumable from the resume drawer) — closing
+ * just declutters the tab bar. If the closed tab was active, activate the
+ * next-best neighbour, falling back to the empty state.
+ */
+function closeAndRemoveTab(id: string): void {
+  // Tell the server first; the resulting pty.exit may race but the tab
+  // will already be gone so the handler is a no-op.
+  sendMsg({ t: 'session.close', id });
+  removeTab(id);
+}
+
+function removeTab(id: string): void {
+  const t = tabs.get(id);
+  if (!t) return;
+  alertDispatcher.cancel(id);
+  try { t.term.dispose(); } catch { /* ignore */ }
+  t.tabEl.remove();
+  t.paneEl.remove();
+  tabs.delete(id);
+
+  if (activeId === id) {
+    activeId = null;
+    if (!IS_POPOUT) lsRemove(LS_KEYS.activeId);
+    // Pick another tab if any remain — prefer the one that was visually
+    // next to the closed one in DOM order. tabs Map iteration order matches
+    // insertion order, which approximates DOM order well enough.
+    const remaining = [...tabs.keys()];
+    if (remaining.length > 0) {
+      activate(remaining[0]);
+    } else {
+      renderEmpty();
+    }
+  }
+}
+
 function beginRename(id: string): void {
   const t = tabs.get(id);
   if (!t) return;
@@ -577,7 +614,7 @@ function showTabContextMenu(id: string, x: number, y: number): void {
       if (lbl) { lbl.textContent = labelFor(t.meta); lbl.title = labelFor(t.meta); }
     }
     else if (act === 'close') {
-      if (confirm('close session?')) sendMsg({ t: 'session.close', id });
+      if (confirm('close session?')) closeAndRemoveTab(id);
     }
   });
 }
@@ -895,7 +932,7 @@ document.addEventListener('keydown', (ev) => {
   } else if (k === 'w') {
     if (activeId) {
       ev.preventDefault();
-      if (confirm('close session?')) sendMsg({ t: 'session.close', id: activeId });
+      if (confirm('close session?')) closeAndRemoveTab(activeId);
     }
   } else if (/^[1-9]$/.test(ev.key)) {
     const idx = Number(ev.key) - 1;
