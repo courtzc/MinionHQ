@@ -36,10 +36,30 @@ const LS_KEYS = {
   lastReposBase: 'cm.lastReposBase',
   chimesEnabled: 'cm.chimesEnabled',
   notifyEnabled: 'cm.notifyEnabled',
+  activeId: 'cm.activeTab',
+  tabTitles: 'cm.tabTitles',
 } as const;
 
 function lsGet(key: string): string | null { try { return localStorage.getItem(key); } catch { return null; } }
 function lsSet(key: string, val: string): void { try { localStorage.setItem(key, val); } catch { /* ignore */ } }
+function lsRemove(key: string): void { try { localStorage.removeItem(key); } catch { /* ignore */ } }
+
+function readTitleMap(): Record<string, string> {
+  try { return JSON.parse(lsGet(LS_KEYS.tabTitles) ?? '{}'); } catch { return {}; }
+}
+function writeTitleMap(map: Record<string, string>): void {
+  lsSet(LS_KEYS.tabTitles, JSON.stringify(map));
+}
+function getCustomTitle(id: string): string | null {
+  const v = readTitleMap()[id];
+  return typeof v === 'string' && v.trim() ? v : null;
+}
+function setCustomTitle(id: string, title: string | null): void {
+  const map = readTitleMap();
+  if (title && title.trim()) map[id] = title.trim();
+  else delete map[id];
+  writeTitleMap(map);
+}
 
 let chimesEnabled = lsGet(LS_KEYS.chimesEnabled) !== 'false';
 let notifyEnabled = lsGet(LS_KEYS.notifyEnabled) !== 'false';
@@ -137,6 +157,7 @@ function handleServerMsg(msg: ServerMsg) {
         ensureTab(m, IS_POPOUT);
       }
       if (tabs.size === 0 && activeId == null) renderEmpty();
+      else restoreActiveFromLS();
       break;
     case 'session.created':
       // In popout windows, ignore creates for other sessions.
@@ -186,10 +207,11 @@ function renderEmpty() {
   const empty = document.createElement('div');
   empty.className = 'empty';
   empty.innerHTML = `
-    <div class="empty-title">No sessions yet</div>
+    <img class="empty-minion" src="/favicon.svg" alt="" />
+    <div class="empty-title">No minions yet</div>
     <div class="empty-sub">Spawn a Copilot session on a branch of your choosing, or pick up where you left off.</div>
     <div class="empty-actions">
-      <button id="empty-new">+ Spawn a new session</button>
+      <button id="empty-new">+ Spawn a new minion</button>
       <button id="empty-resume" class="secondary">↻ Resume a session</button>
     </div>
     <div style="font-size:11px; color: var(--fg-dim)">cwd: <code>${escapeHtml(getDefaultCwd())}</code></div>
@@ -205,14 +227,29 @@ function renderEmpty() {
  * UUID is the routing key, not a name to show users.
  */
 function labelFor(meta: SessionMeta): string {
+  // User-set custom title (via tab rename) wins over everything.
+  const custom = getCustomTitle(meta.id);
+  if (custom) return custom;
   const repo = meta.repoPath ? meta.repoPath.replace(/\/+$/, '').split('/').pop() : null;
   const branch = meta.branch;
-  // If the user set a custom title that isn't just the branch, prefer it.
+  // If the server has a title that isn't just the branch, prefer it.
   if (meta.title && meta.title !== branch) return meta.title;
   if (repo && branch) return `${repo}/${branch}`;
   if (branch) return branch;
   if (repo) return repo;
   return meta.id.slice(0, 8);
+}
+
+function statusDescription(s: SessionStatus): string {
+  switch (s) {
+    case 'spawning': return 'spawning · waking up a new minion';
+    case 'working': return 'working · agent is thinking / running tools';
+    case 'needs-input': return 'needs input · agent is waiting for a y/n or approval';
+    case 'idle': return 'idle · agent finished its turn, ready for the next message';
+    case 'error': return 'error · last operation failed';
+    case 'exited': return 'exited · process is done';
+    default: return s;
+  }
 }
 
 function escapeHtml(s: string): string {
@@ -237,18 +274,24 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     tabEl.style.setProperty('--repo-color', colorForRepo(meta.repoPath ?? null));
     const dot = document.createElement('span');
     dot.className = 'dot';
+    dot.title = statusDescription(meta.status);
     const label = document.createElement('span');
     label.textContent = labelFor(meta);
     label.className = 'label';
     label.title = labelFor(meta);
+    // Double-click the label → rename inline. Saved to localStorage so the
+    // custom title persists across reloads and across browser tabs.
+    label.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      beginRename(meta.id);
+    });
     const pop = document.createElement('span');
     pop.className = 'pop';
     pop.textContent = '↗';
     pop.title = 'Pop out into its own window';
     pop.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      const url = `/?pop=${encodeURIComponent(meta.id)}`;
-      window.open(url, `minionhq-${meta.id}`, 'width=920,height=720,resizable=yes');
+      popOutSession(meta.id);
     });
     const close = document.createElement('span');
     close.className = 'close';
@@ -259,6 +302,12 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     });
     tabEl.append(dot, label, pop, close);
     tabEl.addEventListener('click', () => activate(meta.id));
+    // Right-click → context menu (rename / pop out / close).
+    tabEl.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showTabContextMenu(meta.id, ev.clientX, ev.clientY);
+    });
     // Insert before the inline "+" button so it stays as the last child of .tabs
     // and visually floats just to the right of the last tab.
     const inlineNew = document.getElementById('inline-new');
@@ -385,6 +434,10 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
 function activate(id: string) {
   if (activeId === id) return;
   activeId = id;
+  // Persist so a page refresh stays on this tab instead of snapping back
+  // to the first one. Popout windows never write this — they always show a
+  // single specific session by URL.
+  if (!IS_POPOUT) lsSet(LS_KEYS.activeId, id);
   for (const [tid, t] of tabs) {
     const isActive = tid === id;
     t.tabEl.classList.toggle('active', isActive);
@@ -396,12 +449,143 @@ function activate(id: string) {
   }
 }
 
+function restoreActiveFromLS() {
+  // Called after session.list to land on the previously-active tab instead
+  // of the first one in the iteration order. Quietly no-op if the saved id
+  // is gone (session closed, etc.) or we're in popout mode.
+  if (IS_POPOUT) return;
+  const saved = lsGet(LS_KEYS.activeId);
+  if (!saved || !tabs.has(saved)) return;
+  if (activeId === saved) return;
+  // activate() short-circuits if equal — force the reactivation path.
+  activeId = null;
+  activate(saved);
+}
+
+// ─────────────────────────── tab actions ─────────────────────────────
+
+/**
+ * Open a session in its own browser window via /?pop=<id>.
+ * Marks the session as "popped out from this window" so the main window
+ * stops firing chimes / OS notifications for that session — the popout
+ * window handles them now and we don't want double-alerts.
+ */
+const poppedOutSessions = new Set<string>();
+
+function popOutSession(id: string): void {
+  poppedOutSessions.add(id);
+  const url = `/?pop=${encodeURIComponent(id)}`;
+  window.open(url, `minionhq-${id}`, 'width=920,height=720,resizable=yes');
+}
+
+function beginRename(id: string): void {
+  const t = tabs.get(id);
+  if (!t) return;
+  const label = t.tabEl.querySelector('.label') as HTMLElement | null;
+  if (!label) return;
+  if (label.isContentEditable) return;
+  const before = label.textContent ?? '';
+  label.contentEditable = 'true';
+  label.spellcheck = false;
+  // Select all so the user can immediately type a replacement.
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(label);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  label.focus();
+
+  const commit = (cancel = false) => {
+    label.removeEventListener('keydown', onKey);
+    label.removeEventListener('blur', onBlur);
+    label.contentEditable = 'false';
+    if (cancel) {
+      label.textContent = before;
+      return;
+    }
+    const next = (label.textContent ?? '').trim();
+    if (!next || next === before) {
+      label.textContent = labelFor(t.meta);
+      label.title = labelFor(t.meta);
+      return;
+    }
+    setCustomTitle(id, next);
+    label.textContent = next;
+    label.title = next;
+    if (IS_POPOUT && id === POPOUT_ID) {
+      document.title = `MinionHQ · ${next}`;
+      const ptitle = document.getElementById('popout-title');
+      if (ptitle) ptitle.textContent = next;
+    }
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); commit(false); label.blur(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); commit(true); label.blur(); }
+  };
+  const onBlur = () => commit(false);
+  label.addEventListener('keydown', onKey);
+  label.addEventListener('blur', onBlur);
+}
+
+function showTabContextMenu(id: string, x: number, y: number): void {
+  // One menu at a time — tear down any existing one.
+  document.querySelectorAll('.tab-menu').forEach((n) => n.remove());
+  const t = tabs.get(id);
+  if (!t) return;
+  const menu = document.createElement('div');
+  menu.className = 'tab-menu';
+  menu.innerHTML = `
+    <button data-act="rename">Rename…</button>
+    <button data-act="popout">Pop out</button>
+    <button data-act="reset-name">Reset name</button>
+    <button data-act="close" class="danger">Close session</button>
+  `;
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+  // Clamp into the viewport.
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth) menu.style.left = `${window.innerWidth - r.width - 6}px`;
+  if (r.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - r.height - 6}px`;
+
+  const close = () => {
+    menu.remove();
+    document.removeEventListener('mousedown', onDocDown, true);
+    document.removeEventListener('keydown', onDocKey, true);
+  };
+  const onDocDown = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) close();
+  };
+  const onDocKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(); };
+  document.addEventListener('mousedown', onDocDown, true);
+  document.addEventListener('keydown', onDocKey, true);
+
+  menu.addEventListener('click', (ev) => {
+    const btn = (ev.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null;
+    if (!btn) return;
+    const act = btn.dataset.act!;
+    close();
+    if (act === 'rename') beginRename(id);
+    else if (act === 'popout') popOutSession(id);
+    else if (act === 'reset-name') {
+      setCustomTitle(id, null);
+      const lbl = t.tabEl.querySelector('.label') as HTMLElement | null;
+      if (lbl) { lbl.textContent = labelFor(t.meta); lbl.title = labelFor(t.meta); }
+    }
+    else if (act === 'close') {
+      if (confirm('close session?')) sendMsg({ t: 'session.close', id });
+    }
+  });
+}
+
 function updateStatus(id: string, status: SessionStatus) {
   const t = tabs.get(id);
   if (!t) return;
   const prev = t.meta.status;
   t.meta.status = status;
   t.tabEl.dataset.status = status;
+  const dot = t.tabEl.querySelector('.dot') as HTMLElement | null;
+  if (dot) dot.title = statusDescription(status);
 
   // Hide the loading overlay once the session leaves 'spawning'.
   if (status !== 'spawning' && t.loadingEl.dataset.hidden !== '1') {
@@ -412,10 +596,13 @@ function updateStatus(id: string, status: SessionStatus) {
   // - Chime ALWAYS fires (even when the tab is focused) — the user wants the
   //   audible "agent finished" / "needs input" cue regardless of which tab
   //   they're staring at.
-  // - OS notification toast still suppressed when this tab is currently
-  //   focused — a toast for the foreground app is noise.
+  // - OS notification still fires on focused-tab so users on the empty/list
+  //   page get a toast; we trust the macOS Notification Center to coalesce.
+  // - Sessions popped out from THIS window are silenced here — the popout
+  //   window will handle their chimes/toasts so the user doesn't get
+  //   duplicate alerts from two windows on the same session.
   if (prev === status) return;
-  const isActiveTab = id === activeId && document.visibilityState === 'visible' && document.hasFocus();
+  if (poppedOutSessions.has(id)) return;
 
   let kind: 'needs-input' | 'agent-finished' | 'error' | null = null;
   if (status === 'needs-input' && prev !== 'needs-input') kind = 'needs-input';
@@ -424,7 +611,7 @@ function updateStatus(id: string, status: SessionStatus) {
 
   if (kind) {
     if (chimesEnabled) playChime(kind);
-    if (notifyEnabled && !isActiveTab) notify(kind, labelFor(t.meta));
+    if (notifyEnabled) notify(kind, labelFor(t.meta));
   }
 }
 

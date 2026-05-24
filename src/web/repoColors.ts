@@ -18,18 +18,21 @@
  */
 
 export const REPO_COLOR_PALETTE: readonly string[] = [
-  '#7aa2f7', // 0  blue
-  '#73daca', // 1  mint
-  '#9ece6a', // 2  green
-  '#e0af68', // 3  amber
-  '#ff9e64', // 4  orange
-  '#f7768e', // 5  coral
-  '#ff7eb6', // 6  pink
-  '#bb9af7', // 7  violet
-  '#b4a4ff', // 8  lavender
-  '#2ac3de', // 9  teal
-  '#7dcfff', // 10 cyan
-  '#c3e88d', // 11 lime
+  // A soft, modern, equally-luminant pastel palette. All ~65–75% lightness
+  // and ~55–65% saturation so no single color dominates and every one
+  // works as both an outline tint and a faint background wash.
+  '#ff8aa3', // 0  rose
+  '#ffaa8a', // 1  peach
+  '#ffd28a', // 2  apricot
+  '#e6ec8a', // 3  butter
+  '#a8e08a', // 4  lime
+  '#8addc6', // 5  mint
+  '#8ad8e6', // 6  sky
+  '#8aafff', // 7  periwinkle
+  '#b59cff', // 8  lavender
+  '#dba1ff', // 9  orchid
+  '#ff9ed1', // 10 pink
+  '#ff86b3', // 11 blush
 ] as const;
 
 const LS_KEY = 'cm.repoColors';

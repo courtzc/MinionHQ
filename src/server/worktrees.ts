@@ -1,8 +1,27 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { WORKTREE_DIR, ensureDirs } from './paths.js';
+
+/**
+ * Produce a friendly, stable directory slug for a repository — the same scheme
+ * used by `repoKey()` in context.ts so worktrees and central context line up
+ * on disk: `<lowercase-slug>-<10char-sha1>`. Two repos with the same basename
+ * (e.g. multiple `notes/` checkouts) get distinct hashes; the same repo across
+ * sessions always lands in the same dir.
+ */
+function repoSlugKey(realPath: string): string {
+  const hash = createHash('sha1').update(realPath).digest('hex').slice(0, 10);
+  const slug = basename(realPath).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
+  return `${slug || 'repo'}-${hash}`;
+}
+
+/** Filesystem-safe slug for a branch name. `feat/foo` → `feat--foo`. */
+function branchSlug(branch: string): string {
+  return branch.replace(/[^a-zA-Z0-9._-]+/g, '--').replace(/^-+|-+$/g, '') || 'branch';
+}
 
 export interface WorktreeInfo {
   repoPath: string;
@@ -134,7 +153,18 @@ export function createWorktree(opts: CreateOpts): WorktreeInfo {
 
   const desired = opts.branchName?.trim() || `feat/${slug(opts.sessionId.slice(0, 8))}`;
   const branch = uniqueBranch(repoPath, desired);
-  const worktreePath = join(WORKTREE_DIR, opts.sessionId);
+  // Friendly worktree path: `<WORKTREE_DIR>/<repo-slug>/<branch-slug>`.
+  // Two checkouts of the same repo at the same branch get a `-<id>` suffix
+  // to stay unique without resorting to a bare UUID.
+  let canonicalRepo: string;
+  try { canonicalRepo = realpathSync(repoPath); } catch { canonicalRepo = repoPath; }
+  const repoDir = repoSlugKey(canonicalRepo);
+  let bSlug = branchSlug(branch);
+  let worktreePath = join(WORKTREE_DIR, repoDir, bSlug);
+  if (existsSync(worktreePath)) {
+    bSlug = `${bSlug}--${opts.sessionId.slice(0, 8)}`;
+    worktreePath = join(WORKTREE_DIR, repoDir, bSlug);
+  }
 
   // SAFETY: never overwrite an existing worktree. If something is at the target
   // path with a .git inside, abort — the user might have uncommitted work.
@@ -165,7 +195,7 @@ export function createWorktree(opts: CreateOpts): WorktreeInfo {
       throw e;
     }
   }
-  mkdirSync(WORKTREE_DIR, { recursive: true });
+  mkdirSync(join(WORKTREE_DIR, repoDir), { recursive: true });
 
   const base = opts.baseBranch?.trim() || currentBranch(repoPath) || 'HEAD';
 
