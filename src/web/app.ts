@@ -17,10 +17,18 @@ interface TabState {
   fit: FitAddon;
   tabEl: HTMLDivElement;
   paneEl: HTMLDivElement;
+  loadingEl: HTMLDivElement;
+  firstByteSeen: boolean;
 }
 
 const tabs = new Map<string, TabState>();
 let activeId: string | null = null;
+
+// Pop-out mode: when the URL has ?pop=<sessionId>, this window renders just
+// that one session (no tab bar, no actions) so it can live on its own monitor.
+const POPOUT_ID = new URLSearchParams(location.search).get('pop');
+const IS_POPOUT = !!POPOUT_ID;
+if (IS_POPOUT) document.body.classList.add('popout');
 
 const LS_KEYS = {
   lastRepo: 'cm.lastRepoPath',
@@ -102,6 +110,11 @@ function handleBinaryMsg(buf: Uint8Array): void {
     const sessionId = bytesToUuid(buf, 1);
     const t = tabs.get(sessionId);
     if (t) {
+      // First byte of PTY data means the session is live — drop the loader.
+      if (!t.firstByteSeen) {
+        t.firstByteSeen = true;
+        t.loadingEl.dataset.hidden = '1';
+      }
       // xterm.js write accepts Uint8Array; we slice (zero-copy view) the payload.
       t.term.write(buf.subarray(BIN_HEADER_SIZE));
     }
@@ -116,13 +129,17 @@ function handleServerMsg(msg: ServerMsg) {
       break;
     case 'session.list':
       for (const m of msg.sessions) {
+        // Popout mode: only render the one session we were opened for.
+        if (IS_POPOUT && m.id !== POPOUT_ID) continue;
         // Dormant sessions live in the resume picker, not the main tab bar.
         if (m.dormant) continue;
-        ensureTab(m, false);
+        ensureTab(m, IS_POPOUT);
       }
       if (tabs.size === 0 && activeId == null) renderEmpty();
       break;
     case 'session.created':
+      // In popout windows, ignore creates for other sessions.
+      if (IS_POPOUT && msg.session.id !== POPOUT_ID) break;
       // Treat session.created as "this session is now live (or resumed)" —
       // ensureTab is idempotent, and we want to attach even if a tab exists.
       ensureTab(msg.session, true);
@@ -160,16 +177,41 @@ function handleServerMsg(msg: ServerMsg) {
 }
 
 function renderEmpty() {
+  // In popout mode we don't render the empty splash — popout is meant to be
+  // a single session pane. If it never showed up, the user will see the
+  // "session not found" terminal message instead.
+  if (IS_POPOUT) return;
   panesEl.innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'empty';
   empty.innerHTML = `
-    <div>no sessions yet</div>
-    <button id="empty-new">spawn a copilot session</button>
+    <div class="empty-title">No sessions yet</div>
+    <div class="empty-sub">Spawn a Copilot session on a branch of your choosing, or pick up where you left off.</div>
+    <div class="empty-actions">
+      <button id="empty-new">+ Spawn a new session</button>
+      <button id="empty-resume" class="secondary">↻ Resume a session</button>
+    </div>
     <div style="font-size:11px; color: var(--fg-dim)">cwd: <code>${escapeHtml(getDefaultCwd())}</code></div>
   `;
   panesEl.appendChild(empty);
-    empty.querySelector('#empty-new')?.addEventListener('click', () => openNewSessionModal());
+  empty.querySelector('#empty-new')?.addEventListener('click', () => openNewSessionModal());
+  empty.querySelector('#empty-resume')?.addEventListener('click', () => openResumePicker());
+}
+
+/**
+ * Human-readable label for a session. Default to "<repo>/<branch>", which is
+ * what people care about; fall back through branch → short id. The session
+ * UUID is the routing key, not a name to show users.
+ */
+function labelFor(meta: SessionMeta): string {
+  const repo = meta.repoPath ? meta.repoPath.replace(/\/+$/, '').split('/').pop() : null;
+  const branch = meta.branch;
+  // If the user set a custom title that isn't just the branch, prefer it.
+  if (meta.title && meta.title !== branch) return meta.title;
+  if (repo && branch) return `${repo}/${branch}`;
+  if (branch) return branch;
+  if (repo) return repo;
+  return meta.id.slice(0, 8);
 }
 
 function escapeHtml(s: string): string {
@@ -193,8 +235,18 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     const dot = document.createElement('span');
     dot.className = 'dot';
     const label = document.createElement('span');
-    label.textContent = meta.title ?? meta.branch ?? meta.id.slice(0, 8);
+    label.textContent = labelFor(meta);
     label.className = 'label';
+    label.title = labelFor(meta);
+    const pop = document.createElement('span');
+    pop.className = 'pop';
+    pop.textContent = '↗';
+    pop.title = 'Pop out into its own window';
+    pop.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const url = `/?pop=${encodeURIComponent(meta.id)}`;
+      window.open(url, `minionhq-${meta.id}`, 'width=920,height=720,resizable=yes');
+    });
     const close = document.createElement('span');
     close.className = 'close';
     close.textContent = '×';
@@ -202,7 +254,7 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
       ev.stopPropagation();
       if (confirm('close session?')) sendMsg({ t: 'session.close', id: meta.id });
     });
-    tabEl.append(dot, label, close);
+    tabEl.append(dot, label, pop, close);
     tabEl.addEventListener('click', () => activate(meta.id));
     tabsEl.appendChild(tabEl);
 
@@ -217,6 +269,19 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     const termWrap = document.createElement('div');
     termWrap.className = 'term-wrap';
     paneEl.appendChild(termWrap);
+
+    // Loading overlay — shown while spawning, hidden on first PTY byte or
+    // when status moves out of 'spawning'. Lives inside the term-wrap so it
+    // covers exactly the terminal area.
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'loading-overlay';
+    loadingEl.innerHTML = `
+      <img src="/minion-loader.svg" alt="" />
+      <div class="loading-text">spawning</div>
+    `;
+    if (meta.status !== 'spawning') loadingEl.dataset.hidden = '1';
+    termWrap.appendChild(loadingEl);
+
     panesEl.appendChild(paneEl);
 
     const term = new Terminal({
@@ -224,9 +289,28 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
       fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       fontSize: 13,
       theme: {
-        background: '#000000',
-        foreground: '#e6edf3',
-        cursor: '#2f81f7',
+        // Tokyo Night-ish palette. Matches the rest of the UI chrome.
+        background: '#15171c',
+        foreground: '#c0caf5',
+        cursor: '#7aa2f7',
+        cursorAccent: '#15171c',
+        selectionBackground: '#283457',
+        black: '#15171c',
+        red: '#f7768e',
+        green: '#9ece6a',
+        yellow: '#e0af68',
+        blue: '#7aa2f7',
+        magenta: '#bb9af7',
+        cyan: '#7dcfff',
+        white: '#a9b1d6',
+        brightBlack: '#414868',
+        brightRed: '#ff7a93',
+        brightGreen: '#b9f27c',
+        brightYellow: '#ff9e64',
+        brightBlue: '#7da6ff',
+        brightMagenta: '#bb9af7',
+        brightCyan: '#0db9d7',
+        brightWhite: '#c0caf5',
       },
       allowProposedApi: true,
       scrollback: 10000,
@@ -243,7 +327,7 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
       sendMsg({ t: 'pty.resize', id: meta.id, cols, rows });
     });
 
-    t = { meta, term, fit, tabEl, paneEl };
+    t = { meta, term, fit, tabEl, paneEl, loadingEl, firstByteSeen: false };
     tabs.set(meta.id, t);
 
     // refit on container resize
@@ -254,6 +338,23 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     // Tab already exists — update its meta so status/branch/etc reflect the
     // latest server-side state (covers resume: dormant → spawning).
     t.meta = meta;
+    const labelNode = t.tabEl.querySelector('.label') as HTMLElement | null;
+    if (labelNode) {
+      labelNode.textContent = labelFor(meta);
+      labelNode.title = labelFor(meta);
+    }
+    if (meta.status === 'spawning') {
+      delete t.loadingEl.dataset.hidden;
+      t.firstByteSeen = false;
+    }
+  }
+
+  // In popout mode, set the window title to the session label so multi-monitor
+  // setups stay legible at the OS chrome level.
+  if (IS_POPOUT && meta.id === POPOUT_ID) {
+    document.title = `MinionHQ · ${labelFor(meta)}`;
+    const ptitle = document.getElementById('popout-title');
+    if (ptitle) ptitle.textContent = labelFor(meta);
   }
 
   // Subscribe to the session's PTY stream. Always send attach — the server
@@ -289,6 +390,11 @@ function updateStatus(id: string, status: SessionStatus) {
   t.meta.status = status;
   t.tabEl.dataset.status = status;
 
+  // Hide the loading overlay once the session leaves 'spawning'.
+  if (status !== 'spawning' && t.loadingEl.dataset.hidden !== '1') {
+    t.loadingEl.dataset.hidden = '1';
+  }
+
   // Chime + notify only on meaningful transitions, and only when the tab is
   // not the currently-focused one (otherwise it's just noise).
   if (prev === status) return;
@@ -301,7 +407,7 @@ function updateStatus(id: string, status: SessionStatus) {
 
   if (kind && !isActiveTab) {
     if (chimesEnabled) playChime(kind);
-    if (notifyEnabled) notify(kind, t.meta.title ?? t.meta.branch ?? null);
+    if (notifyEnabled) notify(kind, labelFor(t.meta));
   }
 }
 
@@ -481,6 +587,9 @@ function openNewSessionModal(): void {
 }
 
 newBtn.addEventListener('click', () => { unlockAudio(); openNewSessionModal(); });
+
+const inlineNewBtn = document.getElementById('inline-new') as HTMLButtonElement | null;
+inlineNewBtn?.addEventListener('click', () => { unlockAudio(); openNewSessionModal(); });
 
 const resumeBtn = document.getElementById('resume-session') as HTMLButtonElement | null;
 resumeBtn?.addEventListener('click', () => { unlockAudio(); openResumePicker(); });

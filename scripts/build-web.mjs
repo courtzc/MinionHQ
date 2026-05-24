@@ -23,5 +23,6 @@ await esbuild.build({
 copyFileSync(join(root, 'src/web/index.html'), join(outdir, 'index.html'));
 copyFileSync(join(root, 'src/web/styles.css'), join(outdir, 'styles.css'));
 copyFileSync(join(root, 'src/web/favicon.svg'), join(outdir, 'favicon.svg'));
+copyFileSync(join(root, 'src/web/minion-loader.svg'), join(outdir, 'minion-loader.svg'));
 
 console.log('built public/');
