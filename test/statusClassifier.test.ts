@@ -21,8 +21,12 @@ test('classify: needs-input on y/n prompt', () => {
   assert.equal(classify(b('Do you want to apply these changes?'), 'idle'), 'needs-input');
 });
 
-test('classify: needs-input on bare prompt arrow', () => {
-  assert.equal(classify(b('\n❯\n'), 'idle'), 'needs-input');
+test('classify: idle on bare prompt arrow (agent finished a turn)', () => {
+  // A bare ">"/"❯" prompt means the agent is ready for the next message —
+  // that's "idle" / agent-finished, not "needs-input". (See classifier
+  // IDLE_PROMPT_PATTERNS.)
+  assert.equal(classify(b('\n❯\n'), 'working'), 'idle');
+  assert.equal(classify(b('\n>\n'), 'idle'), 'idle');
 });
 
 test('classify: working on spinner / thinking words', () => {

@@ -117,20 +117,32 @@ body.drawer-open {
   transition: background 120ms, color 120ms, border-color 120ms, box-shadow 120ms;
 }
 .tab::before {
-  /* "M1", "M2", … minion-number badge */
-  content: 'M' counter(tab-num);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Mono", ui-monospace, monospace;
-  font-weight: 700;
-  font-size: 10.5px;
-  line-height: 1;
-  letter-spacing: 0.2px;
-  color: var(--repo-color);
-  background: color-mix(in srgb, var(--repo-color) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--repo-color) 40%, transparent);
-  border-radius: 4px;
-  padding: 2px 5px;
+  /* Minion-numbered badge. We store 12 tiny SVGs (m1.svg…m12.svg) each with
+     the number painted across the minion's body, and pick one per tab
+     position via :nth-of-type rules below. No CSS counter / text overlay
+     needed — the number is baked into the artwork. */
+  content: '';
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  background-image: url('/minions/m1.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
   flex-shrink: 0;
 }
+.tab:nth-of-type(1)::before  { background-image: url('/minions/m1.svg'); }
+.tab:nth-of-type(2)::before  { background-image: url('/minions/m2.svg'); }
+.tab:nth-of-type(3)::before  { background-image: url('/minions/m3.svg'); }
+.tab:nth-of-type(4)::before  { background-image: url('/minions/m4.svg'); }
+.tab:nth-of-type(5)::before  { background-image: url('/minions/m5.svg'); }
+.tab:nth-of-type(6)::before  { background-image: url('/minions/m6.svg'); }
+.tab:nth-of-type(7)::before  { background-image: url('/minions/m7.svg'); }
+.tab:nth-of-type(8)::before  { background-image: url('/minions/m8.svg'); }
+.tab:nth-of-type(9)::before  { background-image: url('/minions/m9.svg'); }
+.tab:nth-of-type(10)::before { background-image: url('/minions/m10.svg'); }
+.tab:nth-of-type(11)::before { background-image: url('/minions/m11.svg'); }
+.tab:nth-of-type(12)::before { background-image: url('/minions/m12.svg'); }
 .tab:hover { color: var(--fg); background: var(--bg-elev); }
 .tab.active {
   /* Active tab keeps the repo-color outline (full opacity now), but

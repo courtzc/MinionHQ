@@ -441,7 +441,7 @@ function openNewSessionModal(): void {
   const lastBase = lsGet(LS_KEYS.lastReposBase) ?? '';
   overlay.innerHTML = `
     <div class="modal">
-      <h2>new copilot session</h2>
+      <h2>new minion session</h2>
       <label>
         <span>repo <em>(from <code id="cm-base-dir">~/repositories</code> · <a href="#" id="cm-change-base">change</a>)</em></span>
         <select id="cm-repo-select" autofocus>

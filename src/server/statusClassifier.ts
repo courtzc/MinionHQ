@@ -11,7 +11,6 @@ function stripAnsi(s: string): string {
 }
 
 const NEEDS_INPUT_PATTERNS: RegExp[] = [
-  /\?\s*$/m,                                // line ending in "?"
   /\[y\/n\]/i,
   /\(y\/n\)/i,
   /\(yes\/no\)/i,
@@ -21,7 +20,14 @@ const NEEDS_INPUT_PATTERNS: RegExp[] = [
   /\bproceed\?/i,
   /\benter\s+to\s+continue\b/i,
   /\bdo you want to\b/i,
-  /^\s*[>❯]\s*$/m,                          // a bare prompt arrow on its own line
+];
+
+// A bare ">"/"❯" prompt on its own line means the agent finished a turn and
+// is ready for the next message — that's "idle" (resolved chime), not
+// "needs-input" (unresolved). Keeping these separate fixes the "random chime"
+// problem where every turn ended with an unresolved cadence.
+const IDLE_PROMPT_PATTERNS: RegExp[] = [
+  /^\s*[>❯]\s*$/m,
 ];
 
 const WORKING_PATTERNS: RegExp[] = [
@@ -47,6 +53,12 @@ export function classify(chunk: Buffer, currentStatus: SessionStatus): SessionSt
   for (const p of ERROR_PATTERNS) if (p.test(text)) return 'error';
   for (const p of NEEDS_INPUT_PATTERNS) if (p.test(text)) return 'needs-input';
   for (const p of WORKING_PATTERNS) if (p.test(text)) return 'working';
+
+  // A bare ">"/"❯" prompt = agent finished its turn and is ready for the next
+  // message. Treat that as "idle" rather than "needs-input" so the user hears
+  // the resolved chime (1-3-5-1) on turn completion and reserves the unresolved
+  // chime for actual interactive prompts (y/n, "approve?", etc.).
+  for (const p of IDLE_PROMPT_PATTERNS) if (p.test(text)) return 'idle';
 
   // If we were "working" and a quiet trailing block arrives, drop to idle.
   // Detect "idle" by trailing blank line + reasonable amount of content.

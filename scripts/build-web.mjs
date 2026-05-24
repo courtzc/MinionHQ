@@ -25,4 +25,10 @@ copyFileSync(join(root, 'src/web/styles.css'), join(outdir, 'styles.css'));
 copyFileSync(join(root, 'src/web/favicon.svg'), join(outdir, 'favicon.svg'));
 copyFileSync(join(root, 'src/web/minion-loader.svg'), join(outdir, 'minion-loader.svg'));
 
+// Numbered minion badges (m1.svg…m12.svg). Tabs reference these via CSS.
+mkdirSync(join(outdir, 'minions'), { recursive: true });
+for (let n = 1; n <= 12; n++) {
+  copyFileSync(join(root, `src/web/minions/m${n}.svg`), join(outdir, `minions/m${n}.svg`));
+}
+
 console.log('built public/');
