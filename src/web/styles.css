@@ -421,3 +421,41 @@ main#panes {
   margin-right: 4px;
 }
 .actions button#open-context:hover { background: var(--bg-3); }
+
+/* ─── Wider modal + NL parser bits ─────────────────────────────────── */
+.modal.modal-wide { width: 560px; max-width: 92vw; }
+.modal textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 38px;
+}
+.modal textarea:focus { outline: none; border-color: var(--accent); }
+.nl-parsed {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  min-height: 14px;
+}
+.nl-parsed .conf {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  margin-left: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.nl-parsed .conf-high   { background: rgba(63,185,80,0.18);  color: var(--green); }
+.nl-parsed .conf-medium { background: rgba(210,153,34,0.18); color: var(--yellow); }
+.nl-parsed .conf-low    { background: rgba(248,81,73,0.18);  color: var(--red); }
+#cm-change-base { color: var(--accent); text-decoration: none; }
+#cm-change-base:hover { text-decoration: underline; }

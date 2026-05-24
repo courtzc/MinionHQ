@@ -10,6 +10,7 @@ import {
   uuidToBytes,
   bytesToUuid,
 } from '../shared/binProtocol.js';
+import { parseIntent, type RepoCandidate } from './nlParse.js';
 
 interface TabState {
   meta: SessionMeta;
@@ -24,6 +25,7 @@ let activeId: string | null = null;
 
 const LS_KEYS = {
   lastRepo: 'cm.lastRepoPath',
+  lastReposBase: 'cm.lastReposBase',
   chimesEnabled: 'cm.chimesEnabled',
   notifyEnabled: 'cm.notifyEnabled',
 } as const;
@@ -299,25 +301,33 @@ function openNewSessionModal(): void {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   const lastRepo = lsGet(LS_KEYS.lastRepo) ?? '';
+  const lastBase = lsGet(LS_KEYS.lastReposBase) ?? '';
   overlay.innerHTML = `
-    <div class="modal">
+    <div class="modal modal-wide">
       <h2>new copilot session</h2>
       <label>
-        <span>repo path <em>(blank = use server cwd, no worktree)</em></span>
-        <input id="cm-repo" type="text" placeholder="/Users/you/repos/yourrepo" value="${escapeHtml(lastRepo)}" autofocus />
+        <span>describe what you want to do <em>(natural language — fills the fields below)</em></span>
+        <textarea id="cm-nl" rows="2" placeholder="e.g. make me a new branch in fde intake automation for us to do some data viz" autofocus></textarea>
+        <span class="nl-parsed" id="cm-nl-parsed"></span>
+      </label>
+      <label>
+        <span>repo <em>(pick from <code id="cm-base-dir">~/repositories</code> · <a href="#" id="cm-change-base">change</a>)</em></span>
+        <select id="cm-repo-select">
+          <option value="">(loading…)</option>
+        </select>
         <span class="repo-status" id="cm-repo-status"></span>
       </label>
       <label>
-        <span>branch off from <em>(base branch — your new branch will fork from this)</em></span>
+        <span>branch off from <em>(base branch)</em></span>
         <select id="cm-base" disabled>
-          <option value="">(enter a repo path first)</option>
+          <option value="">(pick a repo first)</option>
         </select>
       </label>
       <label>
-        <span>new branch name <em>(blank = auto <code>copilot/&lt;id&gt;</code>)</em></span>
-        <input id="cm-branch" type="text" placeholder="copilot/my-feature" />
+        <span>new branch name <em>(blank = auto <code>feat/&lt;id&gt;</code>)</em></span>
+        <input id="cm-branch" type="text" placeholder="feat/my-feature" />
       </label>
-      <p class="hint">a fresh git worktree on the new branch is created under <code>~/.copilot-multi/wt/&lt;id&gt;/</code>. your main checkout is never touched. uncommitted work in the session worktree is auto-committed to its branch on exit — branches always persist.</p>
+      <p class="hint">a fresh git worktree on the new branch is created under <code>~/.copilot-multi/wt/&lt;id&gt;/</code>. your main checkout is never touched. uncommitted work is auto-committed on exit — branches always persist.</p>
       <div class="modal-actions">
         <button class="ghost" id="cm-cancel">cancel</button>
         <button class="primary" id="cm-ok">spawn</button>
@@ -328,16 +338,61 @@ function openNewSessionModal(): void {
   unlockAudio();
   ensurePermission();
 
-  const repoInput = overlay.querySelector('#cm-repo') as HTMLInputElement;
-  const baseSelect = overlay.querySelector('#cm-base') as HTMLSelectElement;
+  const nlInput     = overlay.querySelector('#cm-nl') as HTMLTextAreaElement;
+  const nlParsedEl  = overlay.querySelector('#cm-nl-parsed') as HTMLSpanElement;
+  const repoSelect  = overlay.querySelector('#cm-repo-select') as HTMLSelectElement;
+  const baseSelect  = overlay.querySelector('#cm-base') as HTMLSelectElement;
   const branchInput = overlay.querySelector('#cm-branch') as HTMLInputElement;
-  const repoStatus = overlay.querySelector('#cm-repo-status') as HTMLSpanElement;
+  const repoStatus  = overlay.querySelector('#cm-repo-status') as HTMLSpanElement;
+  const baseDirEl   = overlay.querySelector('#cm-base-dir') as HTMLElement;
+  const changeBase  = overlay.querySelector('#cm-change-base') as HTMLAnchorElement;
+
+  let discoveredRepos: RepoCandidate[] = [];
+  let currentBase = lastBase || '~/repositories';
+  baseDirEl.textContent = currentBase;
+
+  async function discoverAndFill(base: string): Promise<void> {
+    repoSelect.innerHTML = '<option value="">(loading…)</option>';
+    repoSelect.disabled = true;
+    try {
+      const r = await fetch(`/api/repos/discover?base=${encodeURIComponent(base)}`);
+      const data = await r.json() as {
+        ok: boolean;
+        base?: string;
+        repos?: Array<{ name: string; path: string; defaultBranch: string | null }>;
+        error?: string;
+      };
+      if (!data.ok) {
+        repoSelect.innerHTML = `<option value="">(error: ${escapeHtml(data.error ?? 'unknown')})</option>`;
+        return;
+      }
+      currentBase = data.base ?? base;
+      baseDirEl.textContent = currentBase;
+      lsSet(LS_KEYS.lastReposBase, currentBase);
+      discoveredRepos = data.repos ?? [];
+      if (discoveredRepos.length === 0) {
+        repoSelect.innerHTML = `<option value="">(no git repos found in ${escapeHtml(currentBase)})</option>`;
+        return;
+      }
+      const opts = ['<option value="">(choose a repo)</option>'];
+      for (const repo of discoveredRepos) {
+        const selected = repo.path === lastRepo ? ' selected' : '';
+        opts.push(`<option value="${escapeHtml(repo.path)}"${selected}>${escapeHtml(repo.name)}${repo.defaultBranch ? '  ·  ' + escapeHtml(repo.defaultBranch) : ''}</option>`);
+      }
+      repoSelect.innerHTML = opts.join('');
+      repoSelect.disabled = false;
+      // If we have a last-used repo, immediately load its branches.
+      if (repoSelect.value) void refreshBranches(repoSelect.value);
+    } catch (e) {
+      repoSelect.innerHTML = `<option value="">(${escapeHtml((e as Error).message)})</option>`;
+    }
+  }
 
   let lastFetchToken = 0;
-  async function refreshBranches(path: string) {
+  async function refreshBranches(path: string): Promise<void> {
     const token = ++lastFetchToken;
     if (!path.trim()) {
-      baseSelect.innerHTML = '<option value="">(enter a repo path first)</option>';
+      baseSelect.innerHTML = '<option value="">(pick a repo first)</option>';
       baseSelect.disabled = true;
       repoStatus.textContent = '';
       return;
@@ -345,9 +400,8 @@ function openNewSessionModal(): void {
     repoStatus.textContent = 'checking…';
     repoStatus.className = 'repo-status checking';
     try {
-      const url = `/api/repo/branches?path=${encodeURIComponent(path)}`;
-      const r = await fetch(url);
-      if (token !== lastFetchToken) return; // stale
+      const r = await fetch(`/api/repo/branches?path=${encodeURIComponent(path)}`);
+      if (token !== lastFetchToken) return;
       const data = await r.json() as { ok: boolean; error?: string; repoPath?: string; branches?: string[]; current?: string };
       if (!data.ok) {
         baseSelect.innerHTML = '<option value="">(not a git repo — no worktree)</option>';
@@ -362,7 +416,7 @@ function openNewSessionModal(): void {
         `<option value="${escapeHtml(b)}"${b === current ? ' selected' : ''}>${escapeHtml(b)}${b === current ? '  (current)' : ''}</option>`
       ).join('');
       baseSelect.disabled = false;
-      repoStatus.textContent = `✓ git repo at ${data.repoPath} — ${branches.length} branch${branches.length === 1 ? '' : 'es'}`;
+      repoStatus.textContent = `✓ ${data.repoPath} — ${branches.length} branch${branches.length === 1 ? '' : 'es'}`;
       repoStatus.className = 'repo-status ok';
     } catch (e) {
       if (token !== lastFetchToken) return;
@@ -370,21 +424,76 @@ function openNewSessionModal(): void {
       repoStatus.className = 'repo-status warn';
     }
   }
-  // Debounced fetch on input
-  let debounceTimer: number | null = null;
-  repoInput.addEventListener('input', () => {
-    if (debounceTimer != null) clearTimeout(debounceTimer);
-    debounceTimer = window.setTimeout(() => refreshBranches(repoInput.value), 300);
+
+  // ── Wire the NL parser ─────────────────────────────────────────────
+  // As the user types, parse → fill the three fields. Live, debounced 120ms.
+  let nlTimer: number | null = null;
+  let userTouchedBranch = false;
+  branchInput.addEventListener('input', () => { userTouchedBranch = true; });
+
+  function applyParse(): void {
+    const phrase = nlInput.value;
+    if (!phrase.trim()) {
+      nlParsedEl.textContent = '';
+      return;
+    }
+    const result = parseIntent(phrase, discoveredRepos);
+    const bits: string[] = [];
+    if (result.repo) {
+      // Set repo dropdown if it differs.
+      if (repoSelect.value !== result.repo.path) {
+        repoSelect.value = result.repo.path;
+        // Trigger branches load.
+        void refreshBranches(result.repo.path).then(() => {
+          // After branches arrive, try setting base if NL suggested one.
+          if (result.baseBranch) trySetBase(result.baseBranch);
+        });
+      } else if (result.baseBranch) {
+        trySetBase(result.baseBranch);
+      }
+      bits.push(`📂 ${result.repo.name}`);
+    } else {
+      bits.push('📂 <no match — pick manually>');
+    }
+    // Branch name: only overwrite if user hasn't typed manually.
+    if (!userTouchedBranch) {
+      branchInput.value = result.branchName;
+    }
+    bits.push(`🌿 ${result.branchName}`);
+    if (result.baseBranch) bits.push(`⇲ off ${result.baseBranch}`);
+    bits.push(`<span class="conf conf-${result.confidence}">${result.confidence}</span>`);
+    nlParsedEl.innerHTML = bits.join('  ·  ');
+  }
+
+  function trySetBase(b: string): void {
+    const opt = Array.from(baseSelect.options).find((o) => o.value === b);
+    if (opt) baseSelect.value = b;
+  }
+
+  nlInput.addEventListener('input', () => {
+    if (nlTimer != null) clearTimeout(nlTimer);
+    nlTimer = window.setTimeout(applyParse, 120);
   });
-  // Initial fetch if we have a remembered repo
-  if (lastRepo) refreshBranches(lastRepo);
+
+  repoSelect.addEventListener('change', () => {
+    void refreshBranches(repoSelect.value);
+  });
+
+  changeBase.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const next = prompt('repo discovery base directory (e.g. ~/repositories):', currentBase);
+    if (next && next.trim()) void discoverAndFill(next.trim());
+  });
+
+  // Initial discovery
+  void discoverAndFill(currentBase);
 
   const cleanup = () => overlay.remove();
   overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
   overlay.querySelector('#cm-cancel')!.addEventListener('click', cleanup);
 
   const submit = () => {
-    const repo = repoInput.value.trim();
+    const repo = repoSelect.value.trim();
     const base = baseSelect.value.trim();
     const branch = branchInput.value.trim();
     const opts: { repoPath?: string; cwd?: string; branchName?: string; baseBranch?: string } = {};
@@ -400,7 +509,11 @@ function openNewSessionModal(): void {
   };
   overlay.querySelector('#cm-ok')!.addEventListener('click', submit);
   overlay.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && (ev.target as HTMLElement).tagName !== 'SELECT') {
+    const target = ev.target as HTMLElement;
+    if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+      ev.preventDefault();
+      submit();
+    } else if (ev.key === 'Enter' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA') {
       ev.preventDefault();
       submit();
     } else if (ev.key === 'Escape') {
@@ -408,8 +521,7 @@ function openNewSessionModal(): void {
       cleanup();
     }
   });
-  repoInput.focus();
-  repoInput.setSelectionRange(repoInput.value.length, repoInput.value.length);
+  nlInput.focus();
 }
 
 newBtn.addEventListener('click', () => { unlockAudio(); openNewSessionModal(); });

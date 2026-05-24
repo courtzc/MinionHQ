@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, lstatSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WORKTREE_DIR, ensureDirs } from './paths.js';
 
@@ -34,6 +35,50 @@ export function listBranches(repoPath: string): string[] {
 
 export function currentBranch(repoPath: string): string | null {
   return tryRun('git', ['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
+}
+
+export interface DiscoveredRepo {
+  name: string;
+  path: string;
+  defaultBranch: string | null;
+}
+
+const DEFAULT_REPOS_BASE = join(homedir(), 'repositories');
+
+export function expandHome(p: string): string {
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  if (p === '~') return homedir();
+  return p;
+}
+
+export function discoverRepos(base?: string): { base: string; repos: DiscoveredRepo[] } {
+  const baseAbs = resolve(expandHome(base?.trim() || DEFAULT_REPOS_BASE));
+  if (!existsSync(baseAbs)) return { base: baseAbs, repos: [] };
+
+  let entries: string[];
+  try {
+    entries = readdirSync(baseAbs);
+  } catch {
+    return { base: baseAbs, repos: [] };
+  }
+
+  const repos: DiscoveredRepo[] = [];
+  for (const name of entries) {
+    if (name.startsWith('.')) continue;
+    const full = join(baseAbs, name);
+    let stat;
+    try { stat = lstatSync(full); } catch { continue; }
+    if (!stat.isDirectory() && !stat.isSymbolicLink()) continue;
+    // Quick check: does it contain .git?
+    if (!existsSync(join(full, '.git'))) continue;
+    repos.push({
+      name,
+      path: full,
+      defaultBranch: currentBranch(full),
+    });
+  }
+  repos.sort((a, b) => a.name.localeCompare(b.name));
+  return { base: baseAbs, repos };
 }
 
 function slug(s: string): string {
@@ -87,7 +132,7 @@ export function createWorktree(opts: CreateOpts): WorktreeInfo {
   ensureDirs();
   const repoPath = repoToplevel(opts.repoPath);
 
-  const desired = opts.branchName?.trim() || `copilot/${slug(opts.sessionId.slice(0, 8))}`;
+  const desired = opts.branchName?.trim() || `feat/${slug(opts.sessionId.slice(0, 8))}`;
   const branch = uniqueBranch(repoPath, desired);
   const worktreePath = join(WORKTREE_DIR, opts.sessionId);
 

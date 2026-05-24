@@ -9,7 +9,7 @@ import { sessionManager } from './sessions.js';
 import { db, closeDb } from './db.js';
 import { ensureDirs, DEFAULTS } from './paths.js';
 import { closeAllLogs } from './logs.js';
-import { isGitRepo, repoToplevel, listBranches, currentBranch } from './worktrees.js';
+import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import {
   ensureRepoContext,
   listRepoContextFiles,
@@ -155,6 +155,16 @@ const httpServer = createServer(async (req, res) => {
   if (url.pathname === '/api/health') {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.end(JSON.stringify({ ok: true, protocolVersion: PROTOCOL_VERSION }));
+  }
+  if (url.pathname === '/api/repos/discover') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const base = url.searchParams.get('base') ?? '';
+    try {
+      const out = discoverRepos(base || undefined);
+      return res.end(JSON.stringify({ ok: true, ...out }));
+    } catch (e) {
+      return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+    }
   }
   if (url.pathname === '/api/repo/branches') {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
