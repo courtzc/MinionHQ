@@ -1,22 +1,21 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, openSync, closeSync, readSync, statSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { db } from './db.js';
-import { appendPty, closeSessionLogs, logEvent, registerTranscriptSink } from './logs.js';
+import { appendPty, closeSessionLogs, logEvent, logTelemetry, registerTranscriptSink } from './logs.js';
 import { DEFAULTS } from './paths.js';
 import { LIMITS } from './limits.js';
 import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
 import { setupWorktreeContext, appendTranscriptIndex } from './context.js';
-import { classify } from './statusClassifier.js';
 import { RingBuffer } from './ringBuffer.js';
 import type { SessionMeta, SessionStatus } from '../shared/protocol.js';
 
 const REPLAY_MAX = 256 * 1024;
-const COPILOT_SESSION_ID_RE = /session[ _-]?id[:=]\s*([0-9a-f-]{8,})/i;
+const SESSION_STATE_ROOT = join(homedir(), '.copilot', 'session-state');
 
 /**
  * Whitelist for the cmd[] passed to pty.spawn. Only the configured Copilot
@@ -79,6 +78,16 @@ interface Internal {
     text: string;          // accumulated text for cross-chunk regex matching
     answered: boolean;     // already pressed Enter
   };
+  /** Once resolved, the path of ~/.copilot/session-state/<copilotSessionId>. */
+  copilotSessionDir: string | null;
+  /** Polls inuse.<PID>.lock to discover the CLI's session UUID. */
+  resolveTimer: NodeJS.Timeout | null;
+  /** Polls events.jsonl for typed CLI events that drive status/chimes. */
+  tailFd: number | null;
+  tailOffset: number;
+  tailTimer: NodeJS.Timeout | null;
+  /** Track tool.execution_start timestamps for duration telemetry. */
+  toolStartTs: Map<string, { name: string; ts: number }>;
 }
 
 const RESUME_AUTOANSWER_MAX_BYTES = 32 * 1024;
@@ -203,6 +212,12 @@ class SessionManager extends EventEmitter {
       pty: proc,
       replay: new RingBuffer(REPLAY_MAX),
       subscribers: new Set(),
+      copilotSessionDir: null,
+      resolveTimer: null,
+      tailFd: null,
+      tailOffset: 0,
+      tailTimer: null,
+      toolStartTs: new Map(),
     };
     this.sessions.set(id, internal);
 
@@ -285,23 +300,13 @@ class SessionManager extends EventEmitter {
         }
       }
 
-      if (!meta.copilotSessionId) {
-        const text = buf.toString('utf8');
-        const m = text.match(COPILOT_SESSION_ID_RE);
-        if (m) {
-          meta.copilotSessionId = m[1];
-          try {
-            db().prepare('UPDATE sessions SET copilot_session_id = ? WHERE id = ?').run(m[1], id);
-          } catch { /* ignore */ }
-          logEvent(id, 'session.copilot_id', { copilotSessionId: m[1] });
-        }
-      }
-
+      // copilotSessionId is resolved by the sidecar (inuse.<pid>.lock → dir name).
+      // Status transitions are driven by events.jsonl in the sidecar — not by
+      // PTY-byte regex. The only PTY-derived transition we keep is the initial
+      // spawning → idle flip on first byte, so the UI doesn't sit on "spawning"
+      // until the JSONL stream catches up.
       if (meta.status === 'spawning') {
         this.setStatus(id, 'idle');
-      } else {
-        const next = classify(buf, meta.status);
-        if (next && next !== meta.status) this.setStatus(id, next);
       }
 
       for (const fn of internal.subscribers) {
@@ -310,6 +315,8 @@ class SessionManager extends EventEmitter {
     });
 
     proc.onExit(({ exitCode, signal }) => {
+      this.stopResolver(internal);
+      this.stopTail(internal);
       meta.status = 'exited';
       meta.updatedAt = Date.now();
       meta.dormant = true;
@@ -342,6 +349,10 @@ class SessionManager extends EventEmitter {
       this.exitPromises.delete(id);
       resolveExit();
     });
+
+    // Kick off sidecar resolver — once the inuse.<pid>.lock appears we'll know
+    // the CLI's session UUID and can start tailing events.jsonl.
+    this.startResolver(internal);
   }
 
   /**
@@ -472,6 +483,12 @@ class SessionManager extends EventEmitter {
         pty: null,
         replay: new RingBuffer(REPLAY_MAX),
         subscribers: new Set(),
+        copilotSessionDir: null,
+        resolveTimer: null,
+        tailFd: null,
+        tailOffset: 0,
+        tailTimer: null,
+        toolStartTs: new Map(),
       });
       restored++;
     }
@@ -529,6 +546,182 @@ class SessionManager extends EventEmitter {
     this.emit('status', { id, status });
   }
 
+  // ─── JSONL sidecar ────────────────────────────────────────────────────────
+  // The Copilot CLI writes typed events to
+  //   ~/.copilot/session-state/<copilotSessionId>/events.jsonl
+  // We discover <copilotSessionId> by scanning for an `inuse.<pid>.lock` file
+  // (where <pid> is our spawned PTY child), then tail the JSONL to derive
+  // accurate status transitions (working / idle / needs-input / error). The
+  // PTY itself remains the user-facing render — the sidecar only drives state.
+
+  private startResolver(s: Internal): void {
+    const pid = s.pty?.pid;
+    if (!pid) return;
+    const id = s.meta.id;
+    let elapsed = 0;
+    const intervalMs = 100;
+    const maxMs = 30_000;
+    s.resolveTimer = setInterval(() => {
+      if (!s.pty) { this.stopResolver(s); return; }
+      elapsed += intervalMs;
+      const dir = findSessionDirByPid(pid);
+      if (dir) {
+        s.copilotSessionDir = dir;
+        const sid = dir.split('/').pop()!;
+        s.meta.copilotSessionId = sid;
+        try {
+          db().prepare('UPDATE sessions SET copilot_session_id = ? WHERE id = ?').run(sid, id);
+        } catch { /* ignore */ }
+        logEvent(id, 'session.copilot_id', { copilotSessionId: sid });
+        this.stopResolver(s);
+        this.startTail(s);
+      } else if (elapsed >= maxMs) {
+        logEvent(id, 'session.sidecar_unresolved', { pid });
+        this.stopResolver(s);
+      }
+    }, intervalMs);
+  }
+
+  private stopResolver(s: Internal): void {
+    if (s.resolveTimer) { clearInterval(s.resolveTimer); s.resolveTimer = null; }
+  }
+
+  private startTail(s: Internal): void {
+    if (!s.copilotSessionDir) return;
+    const events = join(s.copilotSessionDir, 'events.jsonl');
+    const openOnce = (): boolean => {
+      if (!existsSync(events)) return false;
+      try {
+        s.tailFd = openSync(events, 'r');
+        s.tailOffset = 0;
+        s.tailTimer = setInterval(() => this.drainTail(s), 200);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (openOnce()) return;
+    // events.jsonl may not exist on the first poll — keep trying briefly.
+    const waitTimer = setInterval(() => {
+      if (openOnce()) clearInterval(waitTimer);
+    }, 100);
+    setTimeout(() => clearInterval(waitTimer), 10_000);
+  }
+
+  private stopTail(s: Internal): void {
+    if (s.tailTimer) { clearInterval(s.tailTimer); s.tailTimer = null; }
+    if (s.tailFd !== null) {
+      try { closeSync(s.tailFd); } catch { /* ignore */ }
+      s.tailFd = null;
+    }
+  }
+
+  private drainTail(s: Internal): void {
+    if (s.tailFd === null || !s.copilotSessionDir) return;
+    const events = join(s.copilotSessionDir, 'events.jsonl');
+    let size: number;
+    try { size = statSync(events).size; } catch { return; }
+    if (size <= s.tailOffset) return;
+    const want = size - s.tailOffset;
+    const buf = Buffer.alloc(want);
+    try {
+      readSync(s.tailFd, buf, 0, want, s.tailOffset);
+    } catch { return; }
+    s.tailOffset = size;
+    const text = buf.toString('utf8');
+    const lines = text.split('\n');
+    const lastIsEmpty = lines[lines.length - 1] === '';
+    if (!lastIsEmpty && lines.length > 0) {
+      // Final entry is a partial line — rewind so we re-read it next poll.
+      const partialBytes = Buffer.byteLength(lines[lines.length - 1], 'utf8');
+      s.tailOffset -= partialBytes;
+    }
+    const completeLines = lines.slice(0, -1);
+    for (const l of completeLines) {
+      if (!l.trim()) continue;
+      let ev: Record<string, unknown>;
+      try { ev = JSON.parse(l); } catch { continue; }
+      this.onCliEvent(s, ev);
+    }
+  }
+
+  private onCliEvent(s: Internal, ev: Record<string, unknown>): void {
+    const id = s.meta.id;
+    const type = String(ev.type ?? '');
+    const data = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as Record<string, unknown>;
+    logEvent(id, `cli.${type}`, data);
+
+    switch (type) {
+      case 'session.start':
+      case 'session.resume':
+        this.setStatus(id, 'idle');
+        break;
+      case 'assistant.turn_start':
+        this.setStatus(id, 'working');
+        break;
+      case 'tool.execution_start': {
+        const callId = String(data.toolCallId ?? data.id ?? '');
+        const name = String(data.toolName ?? data.name ?? '');
+        if (callId) s.toolStartTs.set(callId, { name, ts: Date.now() });
+        logTelemetry(id, { kind: 'tool.start', toolName: name, payload: { callId } });
+        break;
+      }
+      case 'tool.execution_complete': {
+        const callId = String(data.toolCallId ?? data.id ?? '');
+        const resultType = String(data.resultType ?? 'success');
+        const ok = resultType === 'success';
+        const started = s.toolStartTs.get(callId);
+        s.toolStartTs.delete(callId);
+        logTelemetry(id, {
+          kind: 'tool.complete',
+          toolName: started?.name,
+          durationMs: started ? Date.now() - started.ts : undefined,
+          success: ok,
+          payload: { callId, resultType, error: ok ? undefined : data.error },
+        });
+        break;
+      }
+      case 'permission.requested':
+        this.setStatus(id, 'needs-input');
+        break;
+      case 'permission.completed':
+        // Status will normalise on the next turn boundary (turn_start/idle).
+        break;
+      case 'session.idle':
+      case 'session.task_complete':
+        this.setStatus(id, 'idle');
+        break;
+      case 'abort':
+        this.setStatus(id, 'idle');
+        break;
+      case 'session.error':
+        this.setStatus(id, 'error');
+        break;
+      case 'session.shutdown': {
+        const td = (data.tokenDetails && typeof data.tokenDetails === 'object')
+          ? (data.tokenDetails as Record<string, Record<string, unknown>>) : null;
+        const input = td?.input ? Number(td.input.tokenCount ?? 0) : 0;
+        const cached = td?.input ? Number(td.input.cachedTokenCount ?? 0) : 0;
+        const output = td?.output ? Number(td.output.tokenCount ?? 0) : 0;
+        logTelemetry(id, {
+          kind: 'usage',
+          inputTokens: input,
+          outputTokens: output,
+          payload: {
+            cached,
+            totalNanoAiu: Number(data.totalNanoAiu ?? 0),
+            totalPremiumRequests: Number(data.totalPremiumRequests ?? 0),
+          },
+        });
+        break;
+      }
+      default:
+        // Unknown CLI event — already mirrored to events.jsonl on disk via logEvent.
+        break;
+    }
+  }
+
+
   /**
    * Kill all live PTYs and wait for their onExit handlers (which run
    * saveWorktreeWork → may commit + push) to complete, up to a grace window.
@@ -552,3 +745,15 @@ class SessionManager extends EventEmitter {
 }
 
 export const sessionManager = new SessionManager();
+
+function findSessionDirByPid(pid: number): string | null {
+  if (!existsSync(SESSION_STATE_ROOT)) return null;
+  let names: string[];
+  try { names = readdirSync(SESSION_STATE_ROOT); } catch { return null; }
+  for (const name of names) {
+    const dir = join(SESSION_STATE_ROOT, name);
+    const lock = join(dir, `inuse.${pid}.lock`);
+    if (existsSync(lock)) return dir;
+  }
+  return null;
+}

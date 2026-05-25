@@ -19,30 +19,61 @@
       <button class="tab-new" id="inline-new" title="New session (⌃⌥T)" aria-label="New session">+</button>
     </nav>
     <div class="actions">
-      <button id="open-context" title="Repo context (⌘.)">📚 context</button>
+      <button id="open-context" title="Repo context / logs (⌘.)">📚 panel</button>
       <button id="resume-session" title="Resume a previous session">↻ resume</button>
       <button id="new-session" title="New session (⌃⌥T)">+ new</button>
     </div>
   </header>
   <main id="panes"></main>
-  <aside id="context-drawer" class="drawer" aria-hidden="true">
+  <aside id="context-drawer" class="drawer" data-mode="context" aria-hidden="true">
     <div class="drawer-head">
-      <div class="drawer-title">Context</div>
+      <div class="drawer-tabs" role="tablist">
+        <button class="drawer-tab" data-mode="context" role="tab" aria-selected="true">📚 Context</button>
+        <button class="drawer-tab" data-mode="logs" role="tab" aria-selected="false">📜 Logs</button>
+      </div>
       <button class="drawer-close" id="close-context" title="Close (Esc)">✕</button>
     </div>
     <div class="drawer-meta" id="ctx-meta"></div>
     <div class="drawer-body">
-      <div class="ctx-list" id="ctx-list"></div>
-      <div class="ctx-editor">
-        <input type="text" id="ctx-filename" placeholder="filename.md" />
-        <textarea id="ctx-content" placeholder="Markdown content shared across every session on this repo, on any branch."></textarea>
-        <div class="ctx-actions">
-          <button id="ctx-save">Save</button>
-          <button id="ctx-new" class="secondary">New file</button>
-          <button id="ctx-delete" class="danger">Delete</button>
-          <span class="ctx-status" id="ctx-status"></span>
+      <section class="tab-pane" data-mode="context">
+        <div class="ctx-list" id="ctx-list"></div>
+        <div class="ctx-editor">
+          <input type="text" id="ctx-filename" placeholder="filename.md" />
+          <textarea id="ctx-content" placeholder="Markdown content shared across every session on this repo, on any branch."></textarea>
+          <div class="ctx-actions">
+            <button id="ctx-save">Save</button>
+            <button id="ctx-new" class="secondary">New file</button>
+            <button id="ctx-delete" class="danger">Delete</button>
+            <span class="ctx-status" id="ctx-status"></span>
+          </div>
         </div>
-      </div>
+      </section>
+      <section class="tab-pane" data-mode="logs" hidden>
+        <div class="logs-controls">
+          <label class="logs-label">stream
+            <select id="logs-stream">
+              <option value="transcript">transcript</option>
+              <option value="events">events</option>
+              <option value="telemetry">telemetry</option>
+            </select>
+          </label>
+          <label class="logs-label">tail
+            <select id="logs-bytes">
+              <option value="16384">16 KB</option>
+              <option value="65536" selected>64 KB</option>
+              <option value="262144">256 KB</option>
+              <option value="1048576">1 MB</option>
+            </select>
+          </label>
+          <label class="logs-label logs-follow">
+            <input type="checkbox" id="logs-follow" />
+            follow
+          </label>
+          <button id="logs-refresh" class="secondary">↻ refresh</button>
+          <span class="ctx-status" id="logs-status"></span>
+        </div>
+        <pre class="logs-view" id="logs-view"></pre>
+      </section>
     </div>
   </aside>
   <footer class="status">
@@ -51,7 +82,7 @@
     <button class="toggle" id="toggle-chimes" data-on="1" title="play chimes on status changes">🔔 chimes</button>
     <button class="toggle" id="toggle-notify" data-on="1" title="OS notifications on status changes">📨 notify</button>
     <span class="sep">·</span>
-    <span id="hint">⌃⌥T new · ⌃⌥W close · ⌃⌥1..9 switch · ⌘. context</span>
+    <span id="hint">⌃⌥T new · ⌃⌥W close · ⌃⌥1..9 switch · ⌘. panel</span>
   </footer>
   <script type="module" src="/app.js"></script>
 </body>

@@ -1044,7 +1044,10 @@ async function openCtxDrawer(): Promise<void> {
   ctxDrawer.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawer-open');
   refitAfterDrawerToggle();
-  await refreshCtxList();
+  applyDrawerMode(drawerMode);
+  if (drawerMode === 'context') {
+    await refreshCtxList();
+  }
 }
 
 function closeCtxDrawer(): void {
@@ -1052,6 +1055,7 @@ function closeCtxDrawer(): void {
   ctxDrawer.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('drawer-open');
   refitAfterDrawerToggle();
+  stopLogsFollow();
 }
 
 async function loadCtxList(repo: string): Promise<void> {
@@ -1170,6 +1174,95 @@ ctxCloseBtn?.addEventListener('click', closeCtxDrawer);
 ctxSaveBtn?.addEventListener('click', () => { void saveCtxFile(); });
 ctxNewBtn?.addEventListener('click', newCtxFile);
 ctxDeleteBtn?.addEventListener('click', () => { void deleteCtxFile(); });
+
+// ─────────────────────────── drawer tabs (context | logs) ──────────────────
+type DrawerMode = 'context' | 'logs';
+const LS_DRAWER_MODE = 'minionhq.drawerMode';
+const drawerTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.drawer-tab'));
+const tabPanes = Array.from(document.querySelectorAll<HTMLElement>('.tab-pane'));
+const logsStreamSel = document.getElementById('logs-stream') as HTMLSelectElement | null;
+const logsBytesSel = document.getElementById('logs-bytes') as HTMLSelectElement | null;
+const logsFollowEl = document.getElementById('logs-follow') as HTMLInputElement | null;
+const logsRefreshBtn = document.getElementById('logs-refresh') as HTMLButtonElement | null;
+const logsStatusEl = document.getElementById('logs-status') as HTMLElement | null;
+const logsViewEl = document.getElementById('logs-view') as HTMLPreElement | null;
+
+let drawerMode: DrawerMode = (lsGet(LS_DRAWER_MODE) === 'logs' ? 'logs' : 'context');
+let logsFollowTimer: ReturnType<typeof setInterval> | null = null;
+
+function setLogsStatus(text: string, cls: 'ok' | 'err' | '' = ''): void {
+  if (!logsStatusEl) return;
+  logsStatusEl.textContent = text;
+  logsStatusEl.className = 'ctx-status' + (cls ? ' ' + cls : '');
+  if (text) setTimeout(() => { if (logsStatusEl.textContent === text) logsStatusEl.textContent = ''; }, 2500);
+}
+
+function applyDrawerMode(mode: DrawerMode): void {
+  drawerMode = mode;
+  lsSet(LS_DRAWER_MODE, mode);
+  if (ctxDrawer) ctxDrawer.setAttribute('data-mode', mode);
+  for (const tab of drawerTabs) tab.setAttribute('aria-selected', String(tab.dataset.mode === mode));
+  for (const pane of tabPanes) pane.hidden = pane.dataset.mode !== mode;
+  if (ctxMeta && mode === 'logs') {
+    ctxMeta.textContent = activeId ? `session ${activeId.slice(0, 8)} · logs` : '(open a session to view its logs)';
+  }
+  stopLogsFollow();
+  if (mode === 'logs') {
+    void refreshLogs();
+    if (logsFollowEl?.checked) startLogsFollow();
+  }
+}
+
+for (const tab of drawerTabs) {
+  tab.addEventListener('click', () => {
+    const m = (tab.dataset.mode === 'logs' ? 'logs' : 'context') as DrawerMode;
+    applyDrawerMode(m);
+  });
+}
+
+async function refreshLogs(): Promise<void> {
+  if (!logsViewEl) return;
+  if (!activeId) {
+    logsViewEl.textContent = '';
+    setLogsStatus('no active session', 'err');
+    return;
+  }
+  const stream = logsStreamSel?.value ?? 'transcript';
+  const bytes = logsBytesSel?.value ?? '65536';
+  try {
+    const r = await fetch(`/api/logs/tail?id=${encodeURIComponent(activeId)}&stream=${encodeURIComponent(stream)}&bytes=${encodeURIComponent(bytes)}`);
+    const data = await r.json() as { ok: boolean; size?: number; truncated?: boolean; content?: string; path?: string; error?: string };
+    if (!data.ok) { setLogsStatus(data.error ?? 'tail failed', 'err'); return; }
+    const wasPinned = isPinnedToBottom(logsViewEl);
+    logsViewEl.textContent = data.content ?? '';
+    if (wasPinned) logsViewEl.scrollTop = logsViewEl.scrollHeight;
+    const kb = ((data.size ?? 0) / 1024).toFixed(1);
+    setLogsStatus(`${kb} KB${data.truncated ? ' (tail)' : ''}`, 'ok');
+    if (ctxMeta && activeId) ctxMeta.textContent = `session ${activeId.slice(0, 8)} · ${data.path ?? ''}`;
+  } catch (e) {
+    setLogsStatus((e as Error).message, 'err');
+  }
+}
+
+function isPinnedToBottom(el: HTMLElement): boolean {
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+}
+
+function startLogsFollow(): void {
+  stopLogsFollow();
+  logsFollowTimer = setInterval(() => { void refreshLogs(); }, 1500);
+}
+function stopLogsFollow(): void {
+  if (logsFollowTimer) { clearInterval(logsFollowTimer); logsFollowTimer = null; }
+}
+
+logsRefreshBtn?.addEventListener('click', () => { void refreshLogs(); });
+logsStreamSel?.addEventListener('change', () => { void refreshLogs(); });
+logsBytesSel?.addEventListener('change', () => { void refreshLogs(); });
+logsFollowEl?.addEventListener('change', () => {
+  if (logsFollowEl.checked && drawerMode === 'logs') startLogsFollow();
+  else stopLogsFollow();
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && ctxDrawer?.getAttribute('aria-hidden') === 'false') {

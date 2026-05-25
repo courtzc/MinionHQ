@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, resolve, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -7,7 +7,7 @@ import * as esbuild from 'esbuild';
 
 import { sessionManager } from './sessions.js';
 import { db, closeDb } from './db.js';
-import { ensureDirs, DEFAULTS } from './paths.js';
+import { ensureDirs, DEFAULTS, sessionLogDir } from './paths.js';
 import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
@@ -334,6 +334,45 @@ const httpServer = createServer(async (req, res) => {
   }
   if (url.pathname === '/api/notify/capabilities') {
     return jsonOk(res, { mac: isMacNotifySupported() });
+  }
+  // GET /api/logs/tail?id=<sessionId>&stream=<transcript|events|telemetry>&bytes=<N>
+  // Returns the tail of one of the per-session log files. Bytes cap defaults to
+  // 65536 (64KB) and is hard-capped at 1MB to keep the response small.
+  if (url.pathname === '/api/logs/tail') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const id = url.searchParams.get('id') ?? '';
+    const stream = (url.searchParams.get('stream') ?? 'transcript') as 'transcript' | 'events' | 'telemetry';
+    const requestedBytes = Number(url.searchParams.get('bytes') ?? 65536);
+    const maxBytes = Math.max(1024, Math.min(1_048_576, Number.isFinite(requestedBytes) ? requestedBytes : 65536));
+    if (!id) return res.end(JSON.stringify({ ok: false, error: 'missing id' }));
+    if (!/^[a-f0-9-]{8,}$/i.test(id)) return res.end(JSON.stringify({ ok: false, error: 'bad id' }));
+    if (stream !== 'transcript' && stream !== 'events' && stream !== 'telemetry') {
+      return res.end(JSON.stringify({ ok: false, error: 'bad stream' }));
+    }
+    const file = stream === 'transcript' ? 'transcript.log' : `${stream}.jsonl`;
+    const fullPath = join(sessionLogDir(id), file);
+    try {
+      if (!existsSync(fullPath)) {
+        return res.end(JSON.stringify({ ok: true, path: fullPath, size: 0, truncated: false, content: '' }));
+      }
+      const st = statSync(fullPath);
+      const size = st.size;
+      const readLen = Math.min(size, maxBytes);
+      const start = size - readLen;
+      const buf = Buffer.alloc(readLen);
+      const fd = openSync(fullPath, 'r');
+      try { readSync(fd, buf, 0, readLen, start); } finally { closeSync(fd); }
+      let content = buf.toString('utf8');
+      // Drop the (possibly partial) first line when we truncated from the front.
+      const truncated = start > 0;
+      if (truncated) {
+        const nl = content.indexOf('\n');
+        if (nl >= 0 && nl < content.length - 1) content = content.slice(nl + 1);
+      }
+      return res.end(JSON.stringify({ ok: true, path: fullPath, size, truncated, content }));
+    } catch (e) {
+      return res.end(JSON.stringify({ ok: false, error: (e as Error).message }));
+    }
   }
   // ─── Sessions API ────────────────────────────────────────────────────
   if (url.pathname === '/api/sessions/dormant') {

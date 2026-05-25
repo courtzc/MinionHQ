@@ -668,6 +668,99 @@ body.popout .pane { padding: 4px; }
 .ctx-status.ok { color: var(--green); }
 .ctx-status.err { color: var(--red); }
 
+/* ─── Drawer tabs (Context | Logs) ──────────────────────────────────── */
+.drawer-tabs {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+.drawer-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+.drawer-tab:hover { color: var(--fg); background: var(--bg-3); }
+.drawer-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+/* Tab panes share the drawer body — only one is visible at a time. */
+.drawer-body { grid-template-rows: 1fr; }
+.tab-pane {
+  display: grid;
+  overflow: hidden;
+  min-height: 0;
+}
+.tab-pane[hidden] { display: none; }
+.tab-pane[data-mode="context"] {
+  grid-template-rows: minmax(80px, 30%) 1fr;
+}
+.tab-pane[data-mode="logs"] {
+  grid-template-rows: auto 1fr;
+}
+
+/* ─── Logs viewer ───────────────────────────────────────────────────── */
+.logs-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.logs-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.logs-label select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+.logs-label.logs-follow input { margin: 0; }
+.logs-controls button {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.logs-controls button:hover { filter: brightness(1.15); }
+.logs-controls .ctx-status { margin-left: auto; }
+.logs-view {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow: auto;
+  min-height: 0;
+}
+.logs-view:empty::before {
+  content: "(no log data yet — open a session first)";
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
 .actions button#open-context {
   background: transparent;
   border: 1px solid var(--border);
