@@ -461,7 +461,7 @@ const httpServer = createServer(async (req, res) => {
           const wav = transcodeToWav(full);
           if (wav) {
             res.setHeader('Content-Type', 'audio/wav');
-            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.setHeader('Cache-Control', 'no-cache');
             return res.end(readFileSync(wav));
           }
           // Fall through to raw bytes if transcode unexpectedly fails.
@@ -472,7 +472,7 @@ const httpServer = createServer(async (req, res) => {
           : lower.endsWith('.caf') ? 'audio/x-caf'
           : 'audio/aiff';
         res.setHeader('Content-Type', ct);
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', 'no-cache');
         return res.end(readFileSync(full));
       }
     }

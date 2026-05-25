@@ -316,7 +316,9 @@
       let cached = audioBufferCache.get(url);
       if (cached) return cached;
       const a = ac();
-      const res = await fetch(url);
+      // cache: 'reload' bypasses any stale browser disk-cache entry from an
+      // earlier deploy (e.g. when we used to serve raw AIFF for these URLs).
+      const res = await fetch(url, { cache: 'reload' });
       if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
       const ab = await res.arrayBuffer();
       // decodeAudioData supports both callback and promise forms; use the
