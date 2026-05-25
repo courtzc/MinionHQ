@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { db } from './db.js';
-import { appendPty, closeSessionLogs, logEvent, logTelemetry, registerTranscriptSink } from './logs.js';
+import { appendPty, closeSessionLogs, logEvent, registerTranscriptSink } from './logs.js';
 import { DEFAULTS } from './paths.js';
 import { LIMITS } from './limits.js';
 import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
@@ -663,22 +663,11 @@ class SessionManager extends EventEmitter {
         const callId = String(data.toolCallId ?? data.id ?? '');
         const name = String(data.toolName ?? data.name ?? '');
         if (callId) s.toolStartTs.set(callId, { name, ts: Date.now() });
-        logTelemetry(id, { kind: 'tool.start', toolName: name, payload: { callId } });
         break;
       }
       case 'tool.execution_complete': {
         const callId = String(data.toolCallId ?? data.id ?? '');
-        const resultType = String(data.resultType ?? 'success');
-        const ok = resultType === 'success';
-        const started = s.toolStartTs.get(callId);
         s.toolStartTs.delete(callId);
-        logTelemetry(id, {
-          kind: 'tool.complete',
-          toolName: started?.name,
-          durationMs: started ? Date.now() - started.ts : undefined,
-          success: ok,
-          payload: { callId, resultType, error: ok ? undefined : data.error },
-        });
         break;
       }
       case 'permission.requested':
@@ -697,24 +686,8 @@ class SessionManager extends EventEmitter {
       case 'session.error':
         this.setStatus(id, 'error');
         break;
-      case 'session.shutdown': {
-        const td = (data.tokenDetails && typeof data.tokenDetails === 'object')
-          ? (data.tokenDetails as Record<string, Record<string, unknown>>) : null;
-        const input = td?.input ? Number(td.input.tokenCount ?? 0) : 0;
-        const cached = td?.input ? Number(td.input.cachedTokenCount ?? 0) : 0;
-        const output = td?.output ? Number(td.output.tokenCount ?? 0) : 0;
-        logTelemetry(id, {
-          kind: 'usage',
-          inputTokens: input,
-          outputTokens: output,
-          payload: {
-            cached,
-            totalNanoAiu: Number(data.totalNanoAiu ?? 0),
-            totalPremiumRequests: Number(data.totalPremiumRequests ?? 0),
-          },
-        });
+      case 'session.shutdown':
         break;
-      }
       default:
         // Unknown CLI event — already mirrored to events.jsonl on disk via logEvent.
         break;

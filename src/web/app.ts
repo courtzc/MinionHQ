@@ -1238,7 +1238,7 @@ async function refreshLogs(): Promise<void> {
     setLogsStatus('no active session', 'err');
     return;
   }
-  const stream = logsStreamSel?.value ?? 'telemetry';
+  const stream = logsStreamSel?.value ?? 'events';
   const bytes = logsBytesSel?.value ?? '65536';
   try {
     const r = await fetch(`/api/logs/tail?id=${encodeURIComponent(activeId)}&stream=${encodeURIComponent(stream)}&bytes=${encodeURIComponent(bytes)}`);
@@ -1247,8 +1247,6 @@ async function refreshLogs(): Promise<void> {
     const wasPinned = isPinnedToBottom(logsViewEl);
     logsViewEl.textContent = formatLogs(stream, data.content ?? '');
     if (wasPinned) logsViewEl.scrollTop = logsViewEl.scrollHeight;
-    const kb = ((data.size ?? 0) / 1024).toFixed(1);
-    setLogsStatus(`${kb} KB${data.truncated ? ' (tail)' : ''}`, 'ok');
     if (ctxMeta && activeId) ctxMeta.textContent = `session ${activeId.slice(0, 8)} · ${data.path ?? ''}`;
   } catch (e) {
     setLogsStatus((e as Error).message, 'err');
