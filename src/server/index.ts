@@ -9,7 +9,7 @@ import * as esbuild from 'esbuild';
 
 import { sessionManager } from './sessions.js';
 import { db, closeDb } from './db.js';
-import { ensureDirs, DEFAULTS, sessionLogDir } from './paths.js';
+import { ensureDirs, DEFAULTS, sessionLogDir, sessionAttachmentsDir } from './paths.js';
 import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
@@ -445,6 +445,60 @@ const httpServer = createServer(async (req, res) => {
   }
   if (url.pathname === '/api/notify/capabilities') {
     return jsonOk(res, { mac: isMacNotifySupported() });
+  }
+  // POST /api/attachments?id=<sessionId>&name=<filename.png>
+  // Body: raw binary blob (image/file). Saves the blob into
+  // ~/.minionhq/attachments/<sessionId>/<ts>-<sanitized-name> and returns
+  // the absolute path. The browser writes the path into the PTY input so
+  // Copilot CLI can reference the file (it accepts `@/abs/path` and
+  // `[📷 /abs/path]` style mentions for image input).
+  if (url.pathname === '/api/attachments' && req.method === 'POST') {
+    (async () => {
+      try {
+        const id = url.searchParams.get('id') ?? '';
+        if (!/^[a-f0-9-]{8,}$/i.test(id)) return jsonErr(res, 400, 'bad id');
+        const rawName = url.searchParams.get('name') ?? 'attachment.bin';
+        // Strip directory traversal + most unsafe characters from the filename.
+        // Keep the extension so Copilot CLI / the model can detect mime type.
+        const safeName = rawName.replace(/[^A-Za-z0-9._-]/g, '_').slice(-80) || 'attachment.bin';
+
+        // Stream the body with a (larger) size cap. We accept up to
+        // MAX_ATTACHMENT_BYTES — well above the 64KB JSON limit but small
+        // enough that a single screenshot doesn't fill the disk.
+        const chunks: Buffer[] = [];
+        let total = 0;
+        const maxBytes = LIMITS.MAX_ATTACHMENT_BYTES;
+        const tooLarge: Error & { code?: string } = Object.assign(
+          new Error(`attachment too large (> ${maxBytes} bytes)`),
+          { code: 'ERR_BODY_TOO_LARGE' },
+        );
+        await new Promise<void>((resolveBody, rejectBody) => {
+          req.on('data', (c: Buffer | string) => {
+            const buf = Buffer.isBuffer(c) ? c : Buffer.from(c);
+            total += buf.length;
+            if (total > maxBytes) {
+              req.removeAllListeners('data');
+              req.resume();
+              rejectBody(tooLarge);
+              return;
+            }
+            chunks.push(buf);
+          });
+          req.on('end', () => resolveBody());
+          req.on('error', rejectBody);
+        });
+        const blob = Buffer.concat(chunks, total);
+        const dir = sessionAttachmentsDir(id);
+        mkdirSync(dir, { recursive: true });
+        const ts = Date.now();
+        const absPath = join(dir, `${ts}-${safeName}`);
+        writeFileSync(absPath, blob);
+        return jsonOk(res, { path: absPath, name: safeName, size: total });
+      } catch (e) {
+        return jsonBodyErr(res, e);
+      }
+    })();
+    return;
   }
   // GET /api/logs/tail?id=<sessionId>&stream=<transcript|events|telemetry>&bytes=<N>
   // Returns the tail of one of the per-session log files. Bytes cap defaults to

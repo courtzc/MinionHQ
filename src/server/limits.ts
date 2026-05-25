@@ -8,6 +8,12 @@ export const LIMITS = {
   /** Max accepted JSON body size for POST endpoints (bytes). */
   MAX_BODY_BYTES: 64 * 1024,
 
+  /** Max accepted raw (non-JSON) upload size — used by /api/attachments
+   *  for clipboard-paste and drag-drop. Large enough for typical
+   *  screenshots and a few-MB diagrams without letting a single agent
+   *  fill the disk. */
+  MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024,
+
   /** How long a POST may stream before we give up (ms). */
   BODY_TIMEOUT_MS: 5_000,
 
