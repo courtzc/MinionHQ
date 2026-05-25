@@ -357,7 +357,7 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     const loadingEl = document.createElement('div');
     loadingEl.className = 'loading-overlay';
     loadingEl.innerHTML = `
-      <img src="/minion-loader.svg" alt="" />
+      <img src="/minion.png" alt="" />
       <div class="loading-text">spawning</div>
     `;
     if (meta.status !== 'spawning') loadingEl.dataset.hidden = '1';

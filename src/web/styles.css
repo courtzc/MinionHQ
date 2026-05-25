@@ -125,32 +125,30 @@ body.drawer-open {
   cursor: text;
 }
 .tab::before {
-  /* Minion-numbered badge. We store 12 tiny SVGs (m1.svg…m12.svg) each with
-     the number painted across the minion's body, and pick one per tab
-     position via :nth-of-type rules below. No CSS counter / text overlay
-     needed — the number is baked into the artwork. */
-  content: '';
-  display: inline-block;
+  /* Minion-numbered badge. One shared transparent minion photo, with the
+     tab's position number overlaid via the `tab-num` CSS counter. The
+     counter is reset on `.tabs` (line ~91) and incremented per `.tab`
+     (line ~96), so the number reflects this tab's position. */
+  content: counter(tab-num);
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
   width: 28px;
   height: 28px;
-  background-image: url('/minions/m1.svg');
+  background-image: url('/minion.png');
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
   flex-shrink: 0;
+  font-family: -apple-system, system-ui, Arial, sans-serif;
+  font-weight: 900;
+  font-size: 13px;
+  line-height: 1;
+  padding-bottom: 3px;
+  color: #1a1a1a;
+  -webkit-text-stroke: 2px #ffd84a;
+  paint-order: stroke fill;
 }
-.tab:nth-of-type(1)::before  { background-image: url('/minions/m1.svg'); }
-.tab:nth-of-type(2)::before  { background-image: url('/minions/m2.svg'); }
-.tab:nth-of-type(3)::before  { background-image: url('/minions/m3.svg'); }
-.tab:nth-of-type(4)::before  { background-image: url('/minions/m4.svg'); }
-.tab:nth-of-type(5)::before  { background-image: url('/minions/m5.svg'); }
-.tab:nth-of-type(6)::before  { background-image: url('/minions/m6.svg'); }
-.tab:nth-of-type(7)::before  { background-image: url('/minions/m7.svg'); }
-.tab:nth-of-type(8)::before  { background-image: url('/minions/m8.svg'); }
-.tab:nth-of-type(9)::before  { background-image: url('/minions/m9.svg'); }
-.tab:nth-of-type(10)::before { background-image: url('/minions/m10.svg'); }
-.tab:nth-of-type(11)::before { background-image: url('/minions/m11.svg'); }
-.tab:nth-of-type(12)::before { background-image: url('/minions/m12.svg'); }
 .tab:hover { color: var(--fg); background: var(--bg-elev); }
 .tab.active {
   /* Active tab keeps the repo-color outline (full opacity now), but
@@ -391,9 +389,17 @@ main#panes {
 }
 .loading-overlay[data-hidden="1"] { opacity: 0; pointer-events: none; }
 .loading-overlay img {
-  width: 96px;
+  width: 112px;
   height: 112px;
   filter: drop-shadow(0 6px 16px rgba(0,0,0,0.45));
+  animation: minion-bob 1.8s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+@keyframes minion-bob {
+  0%, 100% { transform: translateY(0); }
+  25%      { transform: translateY(-8px); }
+  50%      { transform: translateY(0); }
+  75%      { transform: translateY(-4px); }
 }
 .loading-overlay .loading-text {
   font-size: 13px;
