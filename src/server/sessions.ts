@@ -88,6 +88,16 @@ interface Internal {
   tailTimer: NodeJS.Timeout | null;
   /** Track tool.execution_start timestamps for duration telemetry. */
   toolStartTs: Map<string, { name: string; ts: number }>;
+  /**
+   * Set to true when an INTERACTIVE_TOOLS tool just completed. The CLI emits
+   * `assistant.turn_end` immediately afterwards (the "turn" that hosted the
+   * picker is technically over) and then a fresh `assistant.turn_start` for
+   * the agent to process the answer. We don't want the intermediate
+   * working→idle transition because it fires a false agent-finished chime
+   * before Copilot has actually replied. The flag tells the turn_end handler
+   * to stay in 'working' once; turn_start clears it.
+   */
+  suppressNextTurnEndIdle: boolean;
 }
 
 const RESUME_AUTOANSWER_MAX_BYTES = 32 * 1024;
@@ -228,6 +238,7 @@ class SessionManager extends EventEmitter {
       tailOffset: 0,
       tailTimer: null,
       toolStartTs: new Map(),
+      suppressNextTurnEndIdle: false,
     };
     this.sessions.set(id, internal);
 
@@ -499,6 +510,7 @@ class SessionManager extends EventEmitter {
         tailOffset: 0,
         tailTimer: null,
         toolStartTs: new Map(),
+        suppressNextTurnEndIdle: false,
       });
       restored++;
     }
@@ -667,6 +679,8 @@ class SessionManager extends EventEmitter {
         this.setStatus(id, 'idle');
         break;
       case 'assistant.turn_start':
+        // Fresh agent activity — a previous suppression intent is moot.
+        s.suppressNextTurnEndIdle = false;
         this.setStatus(id, 'working');
         break;
       case 'assistant.turn_end':
@@ -674,7 +688,16 @@ class SessionManager extends EventEmitter {
       case 'session.task_complete':
         // Don't mask a needs-input that arrived during the turn (permission
         // requests can fire mid-turn and we want them to win until resolved).
-        if (s.meta.status !== 'needs-input') this.setStatus(id, 'idle');
+        if (s.meta.status === 'needs-input') break;
+        // After an ask_user (or similar) interactive tool completes, the CLI
+        // closes the current turn and immediately opens a new one for the
+        // agent's response. Skip the working→idle flap so the agent-finished
+        // chime doesn't fire before Copilot has actually replied.
+        if (s.suppressNextTurnEndIdle) {
+          s.suppressNextTurnEndIdle = false;
+          break;
+        }
+        this.setStatus(id, 'idle');
         break;
       case 'tool.execution_start': {
         const callId = String(data.toolCallId ?? data.id ?? '');
@@ -690,11 +713,12 @@ class SessionManager extends EventEmitter {
         const callId = String(data.toolCallId ?? data.id ?? '');
         const entry = s.toolStartTs.get(callId);
         s.toolStartTs.delete(callId);
-        // If an interactive tool just resolved while we're still showing
-        // needs-input (e.g. user clicked an option in the PTY), flip back to
-        // working so the next turn boundary can settle normally.
-        if (entry && INTERACTIVE_TOOLS.has(entry.name) && s.meta.status === 'needs-input') {
-          this.setStatus(id, 'working');
+        if (entry && INTERACTIVE_TOOLS.has(entry.name)) {
+          // The user just picked — return to "working" while the agent
+          // processes the answer, and tell the next turn_end to stay quiet
+          // (a fresh turn_start follows immediately for the real response).
+          if (s.meta.status === 'needs-input') this.setStatus(id, 'working');
+          s.suppressNextTurnEndIdle = true;
         }
         break;
       }
