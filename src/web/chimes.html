@@ -194,8 +194,21 @@
         const C = window.AudioContext || window.webkitAudioContext;
         ctx = new C();
       }
-      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       return ctx;
+    }
+    // Browsers gate audio behind a user gesture: on first interaction the
+    // AudioContext is 'suspended' and currentTime is frozen at 0. If you
+    // schedule oscillators with t0 = currentTime + 0 and only THEN call
+    // resume(), the scheduled time is in the past once the context resumes
+    // and the envelope ramps have already completed → silent first click.
+    // Await resume() inside the user-gesture handler so currentTime is
+    // already advancing before we schedule anything.
+    async function unlockedAc() {
+      const a = ac();
+      if (a.state === 'suspended') {
+        try { await a.resume(); } catch { /* ignore */ }
+      }
+      return a;
     }
     function tone(freq, startAt, durSec, gain = 0.16, type = 'sine') {
       const a = ac();
@@ -606,7 +619,10 @@
     const mappingOutEl = document.getElementById('mapping-out');
     const copyStatus  = document.getElementById('copy-status');
 
-    function playChime(c, btn) {
+    async function playChime(c, btn) {
+      // Make sure the AudioContext is actually running before c.play() does
+      // its synchronous scheduling — otherwise the first click is silent.
+      try { await unlockedAc(); } catch { /* ignore */ }
       try { c.play(); } catch (e) { console.warn(e); }
       if (btn) {
         btn.dataset.playing = '1';
@@ -708,6 +724,7 @@
       renderMapping();
 
       document.getElementById('play-all').addEventListener('click', async () => {
+        try { await unlockedAc(); } catch { /* ignore */ }
         for (const c of ALL) {
           try { c.play(); } catch {}
           await new Promise((r) => setTimeout(r, 900));
