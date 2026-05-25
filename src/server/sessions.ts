@@ -659,6 +659,13 @@ class SessionManager extends EventEmitter {
       case 'assistant.turn_start':
         this.setStatus(id, 'working');
         break;
+      case 'assistant.turn_end':
+      case 'session.idle':
+      case 'session.task_complete':
+        // Don't mask a needs-input that arrived during the turn (permission
+        // requests can fire mid-turn and we want them to win until resolved).
+        if (s.meta.status !== 'needs-input') this.setStatus(id, 'idle');
+        break;
       case 'tool.execution_start': {
         const callId = String(data.toolCallId ?? data.id ?? '');
         const name = String(data.toolName ?? data.name ?? '');
@@ -674,11 +681,7 @@ class SessionManager extends EventEmitter {
         this.setStatus(id, 'needs-input');
         break;
       case 'permission.completed':
-        // Status will normalise on the next turn boundary (turn_start/idle).
-        break;
-      case 'session.idle':
-      case 'session.task_complete':
-        this.setStatus(id, 'idle');
+        // Status will normalise on the next turn boundary (turn_end).
         break;
       case 'abort':
         this.setStatus(id, 'idle');
@@ -687,6 +690,7 @@ class SessionManager extends EventEmitter {
         this.setStatus(id, 'error');
         break;
       case 'session.shutdown':
+        // CLI cleanup; the PTY exit handler owns the final 'exited' status.
         break;
       default:
         // Unknown CLI event — already mirrored to events.jsonl on disk via logEvent.
