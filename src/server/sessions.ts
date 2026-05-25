@@ -94,6 +94,16 @@ const RESUME_AUTOANSWER_MAX_BYTES = 32 * 1024;
 const RESUME_AUTOANSWER_MAX_MS = 8000;
 const RESUME_PROMPT_RE = /Session in use|Resume anyway/i;
 
+/**
+ * Tools whose execution blocks the turn waiting on user input. The CLI doesn't
+ * emit `permission.requested` for these (they're not permission gates), they
+ * just stop until the user picks. We treat tool.execution_start for any of
+ * these as a needs-input signal so the chime + OS notification still fire.
+ */
+const INTERACTIVE_TOOLS = new Set<string>([
+  'ask_user',
+]);
+
 class SessionManager extends EventEmitter {
   private sessions = new Map<string, Internal>();
   /** Resolves once a session's onExit handler completes. Used by shutdownAll. */
@@ -670,11 +680,22 @@ class SessionManager extends EventEmitter {
         const callId = String(data.toolCallId ?? data.id ?? '');
         const name = String(data.toolName ?? data.name ?? '');
         if (callId) s.toolStartTs.set(callId, { name, ts: Date.now() });
+        // ask_user is the agent's interactive picker tool — it blocks the turn
+        // waiting on user input but doesn't emit permission.requested. Treat it
+        // the same way: flip to needs-input so chime + OS notification fire.
+        if (INTERACTIVE_TOOLS.has(name)) this.setStatus(id, 'needs-input');
         break;
       }
       case 'tool.execution_complete': {
         const callId = String(data.toolCallId ?? data.id ?? '');
+        const entry = s.toolStartTs.get(callId);
         s.toolStartTs.delete(callId);
+        // If an interactive tool just resolved while we're still showing
+        // needs-input (e.g. user clicked an option in the PTY), flip back to
+        // working so the next turn boundary can settle normally.
+        if (entry && INTERACTIVE_TOOLS.has(entry.name) && s.meta.status === 'needs-input') {
+          this.setStatus(id, 'working');
+        }
         break;
       }
       case 'permission.requested':
@@ -682,6 +703,7 @@ class SessionManager extends EventEmitter {
         break;
       case 'permission.completed':
         // Status will normalise on the next turn boundary (turn_end).
+        if (s.meta.status === 'needs-input') this.setStatus(id, 'working');
         break;
       case 'abort':
         this.setStatus(id, 'idle');
