@@ -307,6 +307,39 @@
     };
 
     // ─── macOS system-sound loader ─────────────────────────────────────────
+    // Decoded AudioBuffer cache per URL. Decoding AIFF via the HTMLAudioElement
+    // path is unreliable in Chrome — Web Audio's decodeAudioData is more
+    // permissive with codecs and routes through the same AudioContext, so we
+    // unlock and play consistently with the synth chimes.
+    const audioBufferCache = new Map();
+    async function decodeUrl(url) {
+      let cached = audioBufferCache.get(url);
+      if (cached) return cached;
+      const a = ac();
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
+      const ab = await res.arrayBuffer();
+      // decodeAudioData supports both callback and promise forms; use the
+      // promise form which is the modern standard (Chrome 47+, Safari 14+).
+      cached = await new Promise((resolve, reject) => {
+        try {
+          const p = a.decodeAudioData(ab, resolve, reject);
+          if (p && typeof p.then === 'function') p.then(resolve, reject);
+        } catch (e) { reject(e); }
+      });
+      audioBufferCache.set(url, cached);
+      return cached;
+    }
+    async function playUrl(url, gain = 0.9) {
+      const a = await unlockedAc();
+      const buf = await decodeUrl(url);
+      const src = a.createBufferSource();
+      src.buffer = buf;
+      const g = a.createGain();
+      g.gain.value = gain;
+      src.connect(g); g.connect(a.destination);
+      src.start();
+    }
     async function loadMacOSChimes() {
       try {
         const r = await fetch('/api/system-sounds');
@@ -320,9 +353,8 @@
           desc: s.source === 'user' ? 'From ~/Library/Sounds' : 'Built-in macOS sound',
           url: s.url,
           play() {
-            const audio = new Audio(s.url);
-            audio.volume = 0.9;
-            audio.play().catch((e) => console.warn('audio play failed', e));
+            // Fire-and-forget; the awaited unlock + decode happens inside.
+            playUrl(s.url).catch((e) => console.warn('macOS chime failed:', s.url, e));
           },
         }));
       } catch (e) {
