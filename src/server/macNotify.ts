@@ -16,6 +16,9 @@
 
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 
 const execFileP = promisify(execFile);
 
@@ -32,6 +35,26 @@ export type MacNotifyKind =
   | 'tool-failed';
 
 const IS_DARWIN = process.platform === 'darwin';
+
+/**
+ * Absolute path to the minion icon PNG used as the notification's app icon.
+ * Computed once at module load — terminal-notifier needs a real on-disk
+ * path (not a URL). Tries `public/icon.png` first (post-build) and falls
+ * back to `src/web/icon.png` (dev mode with no build artifacts).
+ */
+const ICON_PATH: string | null = (() => {
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const projectRoot = resolve(__dirname, '..', '..');
+    for (const rel of ['public/icon.png', 'src/web/icon.png']) {
+      const candidate = join(projectRoot, rel);
+      if (existsSync(candidate)) return candidate;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+})();
 
 // Detect terminal-notifier once at boot. Cached for the lifetime of the
 // process — restarting MinionHQ picks up newly-installed binaries.
@@ -122,6 +145,11 @@ export async function notifyMac(opts: NotifyOpts): Promise<'terminal-notifier' |
       '-group', `minionhq-${opts.kind}`,
       '-sender', 'com.apple.Safari',
     ];
+    if (ICON_PATH) {
+      // -appIcon swaps the (Safari) sender icon for our minion. terminal-notifier
+      // also accepts file:// URLs, but plain absolute paths work too.
+      args.push('-appIcon', ICON_PATH);
+    }
     if (opts.openUrl) {
       args.push('-open', opts.openUrl);
     }

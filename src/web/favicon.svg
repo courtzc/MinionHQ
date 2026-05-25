@@ -1,54 +1,139 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- shadow -->
-  <ellipse cx="32" cy="60" rx="18" ry="2" fill="#000" opacity="0.15"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <!-- Body: warm yellow with subtle vertical gradient -->
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#ffe066"/>
+      <stop offset="55%" stop-color="#facd2e"/>
+      <stop offset="100%" stop-color="#e0b417"/>
+    </linearGradient>
 
-  <!-- body (yellow capsule) -->
-  <rect x="10" y="8" width="44" height="50" rx="22" ry="22" fill="#fcd33b"/>
+    <!-- Body left-edge soft shadow -->
+    <linearGradient id="bodyShade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"  stop-color="#000" stop-opacity="0.18"/>
+      <stop offset="22%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="78%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0.12"/>
+    </linearGradient>
 
-  <!-- body outline highlight -->
-  <rect x="10" y="8" width="44" height="50" rx="22" ry="22" fill="none" stroke="#caa120" stroke-width="1.2"/>
+    <!-- Top highlight strip -->
+    <linearGradient id="bodyHi" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
 
-  <!-- hair tufts -->
-  <path d="M22 10 l-2 -3 M28 8.5 l-1 -3.5 M34 8.5 l1 -3.5 M40 10 l2 -3"
-        stroke="#3a2a16" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+    <!-- Overalls: deep denim blue with vertical gradient -->
+    <linearGradient id="denimGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#3d6fb0"/>
+      <stop offset="100%" stop-color="#264e83"/>
+    </linearGradient>
 
-  <!-- goggle strap (horizontal band) -->
-  <rect x="10" y="22" width="44" height="6" fill="#2a2a2a"/>
+    <!-- Goggle ring: brushed chrome -->
+    <linearGradient id="chromeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#f3f3f3"/>
+      <stop offset="35%" stop-color="#cfcfcf"/>
+      <stop offset="65%" stop-color="#8e8e8e"/>
+      <stop offset="100%" stop-color="#6a6a6a"/>
+    </linearGradient>
 
-  <!-- goggle ring (outer dark) -->
-  <circle cx="32" cy="25" r="10" fill="#bfbfbf"/>
-  <circle cx="32" cy="25" r="10" fill="none" stroke="#5a5a5a" stroke-width="1.4"/>
+    <!-- Iris radial -->
+    <radialGradient id="irisGrad" cx="55%" cy="40%" r="65%">
+      <stop offset="0%"  stop-color="#9c6a37"/>
+      <stop offset="55%" stop-color="#5a3818"/>
+      <stop offset="100%" stop-color="#2c1a0a"/>
+    </radialGradient>
 
-  <!-- eye white -->
-  <circle cx="32" cy="25" r="7" fill="#fafafa"/>
+    <!-- Soft ground shadow -->
+    <radialGradient id="shadowGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#000" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
 
-  <!-- iris -->
-  <circle cx="33" cy="25" r="3.2" fill="#5b3b1f"/>
+    <!-- Capsule clip for body decorations -->
+    <clipPath id="bodyClip">
+      <rect x="40" y="22" width="176" height="206" rx="88" ry="88"/>
+    </clipPath>
+  </defs>
 
-  <!-- pupil -->
-  <circle cx="33.5" cy="25" r="1.6" fill="#101010"/>
+  <!-- Ground shadow -->
+  <ellipse cx="128" cy="240" rx="74" ry="8" fill="url(#shadowGrad)"/>
 
-  <!-- catch-light -->
-  <circle cx="34.5" cy="23.8" r="0.8" fill="#fff"/>
+  <!-- Body capsule -->
+  <rect x="40" y="22" width="176" height="206" rx="88" ry="88" fill="url(#bodyGrad)"/>
+  <rect x="40" y="22" width="176" height="206" rx="88" ry="88" fill="url(#bodyShade)"/>
 
-  <!-- smile -->
-  <path d="M25 38 Q32 44 39 38" stroke="#1a1a1a" stroke-width="1.8"
-        stroke-linecap="round" fill="none"/>
-  <!-- tooth hint -->
-  <rect x="30.5" y="39.2" width="2.4" height="1.8" fill="#fafafa"/>
+  <!-- Top highlight inside capsule -->
+  <g clip-path="url(#bodyClip)">
+    <ellipse cx="100" cy="60" rx="56" ry="22" fill="url(#bodyHi)"/>
+  </g>
 
-  <!-- overalls (blue bottom) -->
-  <path d="M10 47 v9 a22 22 0 0 0 44 0 v-9 Z" fill="#3b6ea8"/>
-  <!-- overalls outline -->
-  <path d="M10 47 h44" stroke="#27497a" stroke-width="1"/>
+  <!-- Hair tufts -->
+  <g stroke="#2a1e10" stroke-width="3" stroke-linecap="round" fill="none">
+    <path d="M88 24  q-3 -10 -8 -16"/>
+    <path d="M108 19 q-1 -10 -3 -16"/>
+    <path d="M128 17 q0 -10 0 -16"/>
+    <path d="M148 19 q1 -10 3 -16"/>
+    <path d="M168 24 q3 -10 8 -16"/>
+  </g>
 
-  <!-- overall straps -->
-  <rect x="22.5" y="28" width="2.4" height="19" fill="#3b6ea8"/>
-  <rect x="39.1" y="28" width="2.4" height="19" fill="#3b6ea8"/>
-  <!-- strap buttons -->
-  <circle cx="23.7" cy="48" r="1.2" fill="#fcd33b"/>
-  <circle cx="40.3" cy="48" r="1.2" fill="#fcd33b"/>
+  <!-- Overalls bottom (clipped to capsule so it follows the body curve) -->
+  <g clip-path="url(#bodyClip)">
+    <path d="M40 160 V228 H216 V160 Z" fill="url(#denimGrad)"/>
+    <!-- Overalls top line highlight -->
+    <path d="M40 160 H216" stroke="#5388c8" stroke-width="1.5" opacity="0.5"/>
+    <path d="M40 161.5 H216" stroke="#1d3a64" stroke-width="1" opacity="0.6"/>
+  </g>
 
-  <!-- front pocket -->
-  <rect x="26" y="50" width="12" height="6" rx="1" fill="none" stroke="#27497a" stroke-width="1"/>
+  <!-- Overall straps -->
+  <g>
+    <rect x="92"  y="110" width="11" height="60" rx="2" fill="url(#denimGrad)"/>
+    <rect x="153" y="110" width="11" height="60" rx="2" fill="url(#denimGrad)"/>
+    <!-- subtle strap shading -->
+    <rect x="92"  y="110" width="11" height="60" rx="2" fill="none" stroke="#1d3a64" stroke-width="0.8" opacity="0.6"/>
+    <rect x="153" y="110" width="11" height="60" rx="2" fill="none" stroke="#1d3a64" stroke-width="0.8" opacity="0.6"/>
+  </g>
+
+  <!-- Strap buttons (yellow) -->
+  <circle cx="97.5"  cy="166" r="3.6" fill="#facd2e" stroke="#8a6c12" stroke-width="0.8"/>
+  <circle cx="158.5" cy="166" r="3.6" fill="#facd2e" stroke="#8a6c12" stroke-width="0.8"/>
+
+  <!-- Front pocket -->
+  <rect x="106" y="180" width="44" height="26" rx="3" fill="none" stroke="#1d3a64" stroke-width="1.5" opacity="0.8"/>
+  <path d="M106 188 H150" stroke="#1d3a64" stroke-width="1" opacity="0.5"/>
+
+  <!-- Goggle strap (horizontal band across face) -->
+  <rect x="40" y="86" width="176" height="14" fill="#1f1f1f"/>
+  <rect x="40" y="86" width="176" height="2" fill="#3a3a3a"/>
+  <rect x="40" y="98" width="176" height="2" fill="#0a0a0a"/>
+
+  <!-- Goggle outer ring (chrome) -->
+  <circle cx="128" cy="93" r="34" fill="url(#chromeGrad)"/>
+  <circle cx="128" cy="93" r="34" fill="none" stroke="#4a4a4a" stroke-width="1.5"/>
+
+  <!-- Goggle inner ring (darker) -->
+  <circle cx="128" cy="93" r="29" fill="#1c1c1c"/>
+
+  <!-- Eye white -->
+  <circle cx="128" cy="93" r="25" fill="#fafafa"/>
+
+  <!-- Iris -->
+  <circle cx="131" cy="93" r="11" fill="url(#irisGrad)"/>
+
+  <!-- Pupil -->
+  <circle cx="132.5" cy="93" r="5.2" fill="#0a0a0a"/>
+
+  <!-- Catch lights -->
+  <circle cx="135.5" cy="89" r="2.6" fill="#fff"/>
+  <circle cx="129"   cy="97" r="1.2" fill="#fff" opacity="0.6"/>
+
+  <!-- Goggle reflection arc (subtle) -->
+  <path d="M104 80 Q116 70 132 72" stroke="#fff" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.35"/>
+
+  <!-- Smile -->
+  <path d="M104 138 Q128 162 152 138" stroke="#1a1310" stroke-width="3.2" stroke-linecap="round" fill="none"/>
+  <!-- Smile shadow (inner mouth hint) -->
+  <path d="M109 140 Q128 158 147 140" fill="#1a1310" opacity="0.45"/>
+
+  <!-- Tooth -->
+  <rect x="124.5" y="144" width="7" height="6" rx="1" fill="#fafafa"/>
+  <rect x="124.5" y="144" width="7" height="6" rx="1" fill="none" stroke="#1a1310" stroke-width="0.6"/>
 </svg>
