@@ -844,3 +844,131 @@ body.drawer-open .actions button#open-logs-btn[data-active="false"] {
 .tab-menu button:hover { background: var(--bg-3); color: var(--fg); }
 .tab-menu button.danger { color: var(--red); }
 .tab-menu button.danger:hover { background: color-mix(in srgb, var(--red) 20%, transparent); }
+
+/* ─────────────── per-tab elapsed-time badge ───────────────
+   Small chip next to the tab title, only visible while the session is in
+   the `working` state. Updated once a second by a ticker in app.ts. */
+.tab .elapsed {
+  display: none;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.tab[data-status="working"] .elapsed[data-show="1"] { display: inline-block; }
+
+/* ─────────────── Cmd/Ctrl+K session palette ───────────────
+   Dim overlay + centred picker; lightweight, keyboard-first. */
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  animation: palette-fade 80ms ease-out;
+}
+@keyframes palette-fade { from { opacity: 0; } to { opacity: 1; } }
+.palette-box {
+  width: min(540px, 90vw);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.palette-input {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  font: 14px -apple-system, sans-serif;
+  padding: 12px 14px;
+  outline: none;
+}
+.palette-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+.palette-empty { padding: 14px; color: var(--fg-dim); font-size: 12px; text-align: center; }
+.palette-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.palette-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.palette-main { color: var(--fg); font-size: 13px; }
+.palette-meta { color: var(--fg-dim); font-size: 11px; grid-row: 2; }
+.palette-status {
+  align-self: center;
+  grid-column: 2; grid-row: 1 / span 2;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--fg-soft);
+}
+.palette-status[data-status="working"]      { color: var(--accent); }
+.palette-status[data-status="needs-input"]  { color: var(--yellow); }
+.palette-status[data-status="error"]        { color: var(--red); }
+.palette-status[data-status="idle"]         { color: var(--green); }
+
+/* ─────────────── drag-drop target indicator ───────────────
+   Highlights the terminal pane while the user drags a file over it so
+   they know exactly where the drop will be accepted. */
+.term-wrap.dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* ─────────────── coloured event log entries ───────────────
+   Logs view renders each JSONL event as a `.ev` block. Colour comes from
+   a class derived in app.ts (`kindToClass`). Stays readable on dark BG. */
+.logs-view { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; }
+.ev {
+  border-left: 2px solid var(--border);
+  padding: 2px 0 6px 8px;
+  margin: 4px 0;
+}
+.ev pre {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-soft);
+}
+.ev-ts   { color: var(--fg-dim); margin-right: 6px; }
+.ev-kind { color: var(--fg);     font-weight: 600; }
+
+.ev-assistant   { border-left-color: var(--accent); }
+.ev-assistant .ev-kind { color: var(--accent); }
+.ev-user        { border-left-color: var(--cyan); }
+.ev-user .ev-kind { color: var(--cyan); }
+.ev-tool        { border-left-color: var(--yellow); }
+.ev-tool .ev-kind { color: var(--yellow); }
+.ev-error       { border-left-color: var(--red); }
+.ev-error .ev-kind { color: var(--red); }
+.ev-needs-input { border-left-color: var(--purple); }
+.ev-needs-input .ev-kind { color: var(--purple); }
+.ev-hook        { border-left-color: var(--cyan); opacity: 0.85; }
+.ev-system      { border-left-color: var(--fg-dim); opacity: 0.75; }
+.ev-default     { border-left-color: var(--border-strong); }
+.ev-raw         { border-left-color: var(--border); }

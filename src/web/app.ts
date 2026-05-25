@@ -21,6 +21,13 @@ interface TabState {
   paneEl: HTMLDivElement;
   loadingEl: HTMLDivElement;
   firstByteSeen: boolean;
+  /** Wall-clock ms when this session most recently entered the `working`
+   *  status. Used by the per-tab elapsed-time badge so you can see at a
+   *  glance which session has been thinking the longest. `null` when not
+   *  currently working. */
+  workingStartedAt: number | null;
+  /** Cached <span class="elapsed"> inside tabEl, updated by the ticker. */
+  elapsedEl: HTMLSpanElement;
 }
 
 const tabs = new Map<string, TabState>();
@@ -322,7 +329,12 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
       ev.stopPropagation();
       if (confirm('close session?')) closeAndRemoveTab(meta.id);
     });
-    tabEl.append(dot, label, pop, close);
+    // Elapsed-time badge shown only while status === 'working'. Updated by
+    // the module-level ticker every second so all working tabs surface the
+    // running clock at a glance.
+    const elapsedEl = document.createElement('span');
+    elapsedEl.className = 'elapsed';
+    tabEl.append(dot, label, elapsedEl, pop, close);
     tabEl.addEventListener('click', () => activate(meta.id));
     // Right-click → context menu (rename / pop out / close).
     tabEl.addEventListener('contextmenu', (ev) => {
@@ -407,8 +419,9 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     term.onResize(({ cols, rows }) => {
       sendMsg({ t: 'pty.resize', id: meta.id, cols, rows });
     });
+    attachUploadHandlers(meta.id, termWrap);
 
-    t = { meta, term, fit, tabEl, paneEl, loadingEl, firstByteSeen: false };
+    t = { meta, term, fit, tabEl, paneEl, loadingEl, firstByteSeen: false, workingStartedAt: null, elapsedEl };
     tabs.set(meta.id, t);
 
     // refit on container resize
@@ -658,6 +671,21 @@ function updateStatus(id: string, status: SessionStatus, cause?: InputCause) {
   const dot = t.tabEl.querySelector('.dot') as HTMLElement | null;
   if (dot) dot.title = statusDescription(status);
 
+  // Track when the session entered 'working' so the per-tab ticker can
+  // surface elapsed time. Clear it on any other status so the badge hides.
+  if (status === 'working') {
+    if (t.workingStartedAt == null) t.workingStartedAt = Date.now();
+  } else {
+    t.workingStartedAt = null;
+    t.elapsedEl.textContent = '';
+    t.elapsedEl.dataset.show = '0';
+  }
+
+  // Window title reflects the count of sessions needing input so the OS
+  // dock / tab bar can convey "the swarm needs you" without the user
+  // having to look at MinionHQ. Also bumps a tab-bar visible badge.
+  updateWindowTitle();
+
   // Hide the loading overlay once the session leaves 'spawning'.
   if (status !== 'spawning' && t.loadingEl.dataset.hidden !== '1') {
     t.loadingEl.dataset.hidden = '1';
@@ -674,6 +702,50 @@ function updateStatus(id: string, status: SessionStatus, cause?: InputCause) {
   // optional `cause` lets it pick a more specific chime (ask-user vs
   // permission vs elicitation, etc).
   alertDispatcher.onTransition(id, prev, status, cause);
+}
+
+/**
+ * Render the document title with a `(N)` prefix when N sessions need input.
+ * Macs surface this in the dock badge / tab bar; browsers show it in the
+ * tab label. Cheap, glance-able awareness when the window is in the
+ * background. Popout windows skip this (they only show one session).
+ */
+function updateWindowTitle(): void {
+  if (IS_POPOUT) return;
+  let needsInput = 0;
+  for (const t of tabs.values()) {
+    if (t.meta.status === 'needs-input') needsInput++;
+  }
+  const prefix = needsInput > 0 ? `(${needsInput}) ` : '';
+  const suffix = needsInput > 0 ? ' · needs you' : '';
+  document.title = `${prefix}MinionHQ${suffix}`;
+}
+
+/**
+ * Ticker that updates the elapsed-time badge on every working tab once per
+ * second. Self-throttling: when no session is working the loop is a single
+ * cheap iteration. We never tear it down — running once per second forever
+ * is negligible cost.
+ */
+setInterval(() => {
+  const now = Date.now();
+  for (const t of tabs.values()) {
+    if (t.meta.status === 'working' && t.workingStartedAt != null) {
+      const secs = Math.floor((now - t.workingStartedAt) / 1000);
+      t.elapsedEl.textContent = formatElapsed(secs);
+      t.elapsedEl.dataset.show = '1';
+    }
+  }
+}, 1000);
+
+function formatElapsed(totalSecs: number): string {
+  if (totalSecs < 60) return `${totalSecs}s`;
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  if (m < 60) return `${m}:${s.toString().padStart(2, '0')}`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${h}:${mm.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 // Singleton alert dispatcher. The `fire` callback is the ONLY place chimes
@@ -977,6 +1049,202 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
+// ─── Cmd+K / Ctrl+K session palette ───────────────────────────────────────
+//
+// A quick fuzzy switcher over open sessions. Lets you jump to any tab by
+// typing part of its name or repo path instead of clicking. This works
+// alongside the Ctrl+Alt+1..9 numeric switcher above for when you have
+// more than 9 sessions or just don't remember the order.
+document.addEventListener('keydown', (ev) => {
+  if (!(ev.metaKey || ev.ctrlKey)) return;
+  if (ev.key !== 'k' && ev.key !== 'K') return;
+  // Don't fight other Cmd+K bindings if a textbox already has focus and
+  // wants the keystroke (rare, but e.g. a future search input).
+  const target = ev.target as HTMLElement | null;
+  if (target && target.closest('.palette-overlay')) return;
+  ev.preventDefault();
+  openPalette();
+});
+
+function openPalette(): void {
+  // Reuse a single overlay if already open.
+  const existing = document.querySelector('.palette-overlay') as HTMLDivElement | null;
+  if (existing) {
+    (existing.querySelector('.palette-input') as HTMLInputElement | null)?.focus();
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'palette-overlay';
+  const box = document.createElement('div');
+  box.className = 'palette-box';
+  const input = document.createElement('input');
+  input.className = 'palette-input';
+  input.placeholder = 'Switch to session… (type repo, branch, or name)';
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  const list = document.createElement('div');
+  list.className = 'palette-list';
+  box.append(input, list);
+  overlay.append(box);
+  document.body.append(overlay);
+  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closePalette(); });
+
+  const entries = [...tabs.values()].map((t) => ({
+    id: t.meta.id,
+    label: t.meta.title || labelFor(t.meta),
+    repo: t.meta.repoPath ?? '',
+    branch: t.meta.branch ?? '',
+    status: t.meta.status,
+  }));
+  let cursor = 0;
+
+  function render() {
+    const q = input.value.trim().toLowerCase();
+    const filtered = entries.filter((e) => {
+      if (!q) return true;
+      return (
+        e.label.toLowerCase().includes(q) ||
+        e.repo.toLowerCase().includes(q) ||
+        e.branch.toLowerCase().includes(q) ||
+        e.id.toLowerCase().includes(q)
+      );
+    });
+    if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1);
+    list.innerHTML = '';
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'palette-empty';
+      empty.textContent = 'No sessions match.';
+      list.append(empty);
+      return;
+    }
+    filtered.forEach((e, i) => {
+      const item = document.createElement('div');
+      item.className = 'palette-item' + (i === cursor ? ' active' : '');
+      item.dataset.id = e.id;
+      const meta = document.createElement('div');
+      meta.className = 'palette-meta';
+      meta.textContent = [e.repo, e.branch].filter(Boolean).join(' · ') || e.id.slice(0, 8);
+      const main = document.createElement('div');
+      main.className = 'palette-main';
+      main.textContent = e.label;
+      const tag = document.createElement('div');
+      tag.className = 'palette-status';
+      tag.dataset.status = e.status;
+      tag.textContent = e.status;
+      item.append(main, meta, tag);
+      item.addEventListener('mouseenter', () => { cursor = i; render(); });
+      item.addEventListener('click', () => { pick(e.id); });
+      list.append(item);
+    });
+  }
+  function pick(id: string) {
+    closePalette();
+    activate(id);
+  }
+  function closePalette() {
+    overlay.remove();
+  }
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); closePalette(); return; }
+    const items = list.querySelectorAll<HTMLDivElement>('.palette-item');
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      if (items.length) { cursor = (cursor + 1) % items.length; render(); }
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      if (items.length) { cursor = (cursor - 1 + items.length) % items.length; render(); }
+    } else if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const chosen = items[cursor];
+      if (chosen?.dataset.id) pick(chosen.dataset.id);
+    }
+  });
+  input.addEventListener('input', () => { cursor = 0; render(); });
+  render();
+  setTimeout(() => input.focus(), 0);
+}
+
+// ─── Drag-drop + clipboard-paste attachments ──────────────────────────────
+//
+// When the user drags a file onto a session's terminal pane (or pastes an
+// image from the clipboard), we POST the bytes to /api/attachments and
+// then write the resulting absolute path into the PTY input. Copilot CLI
+// recognises absolute paths to images and other files as part of the
+// prompt, so this lets you "drop a screenshot into the agent" without
+// hunting for the file in Finder.
+async function uploadAttachment(sessionId: string, name: string, data: Blob): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/attachments?id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': data.type || 'application/octet-stream' },
+      body: data,
+    });
+    const json = await res.json() as { ok?: boolean; path?: string; error?: string };
+    if (!json.ok || !json.path) {
+      console.warn('[attachments] upload failed:', json.error);
+      return null;
+    }
+    return json.path;
+  } catch (e) {
+    console.warn('[attachments] upload error:', e);
+    return null;
+  }
+}
+
+function attachUploadHandlers(sessionId: string, termWrap: HTMLElement): void {
+  // Drag-and-drop. We highlight termWrap during dragover so the user has
+  // a clear drop target; the actual upload runs on `drop`.
+  termWrap.addEventListener('dragover', (ev) => {
+    ev.preventDefault();
+    termWrap.classList.add('dragover');
+  });
+  termWrap.addEventListener('dragleave', () => {
+    termWrap.classList.remove('dragover');
+  });
+  termWrap.addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    termWrap.classList.remove('dragover');
+    const files = ev.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    void handleFiles(sessionId, Array.from(files));
+  });
+  // Clipboard paste — fires when xterm/term wrap has focus and the user
+  // hits Cmd/Ctrl+V. We only handle the image/binary case here; plain
+  // text paste continues to flow through xterm.js untouched.
+  termWrap.addEventListener('paste', (ev) => {
+    const items = ev.clipboardData?.items;
+    if (!items) return;
+    const blobs: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) blobs.push(f);
+      }
+    }
+    if (blobs.length === 0) return;
+    ev.preventDefault();
+    void handleFiles(sessionId, blobs);
+  });
+}
+
+async function handleFiles(sessionId: string, files: File[]): Promise<void> {
+  const paths: string[] = [];
+  for (const f of files) {
+    const name = f.name || `paste-${Date.now()}.${(f.type.split('/')[1] ?? 'bin')}`;
+    const path = await uploadAttachment(sessionId, name, f);
+    if (path) paths.push(path);
+  }
+  if (paths.length === 0) return;
+  // Type the paths into the PTY (space-separated) so Copilot CLI sees
+  // them as attachment references in the prompt the user is composing.
+  // We go through the same binary input channel xterm uses so the bytes
+  // land in the agent's stdin exactly as if the user had typed them.
+  const text = paths.join(' ') + ' ';
+  sendPtyInputBinary(sessionId, utf8Encoder.encode(text));
+}
+
 // Settings toggles in the footer (chimes / notifications)
 function wireSettings(): void {
   const chimeBtn = document.getElementById('toggle-chimes') as HTMLButtonElement | null;
@@ -1278,7 +1546,7 @@ async function refreshLogs(): Promise<void> {
     const data = await r.json() as { ok: boolean; size?: number; truncated?: boolean; content?: string; path?: string; error?: string };
     if (!data.ok) { setLogsStatus(data.error ?? 'tail failed', 'err'); return; }
     const wasPinned = isPinnedToBottom(logsViewEl);
-    logsViewEl.textContent = formatLogs(stream, data.content ?? '');
+    logsViewEl.innerHTML = formatLogs(stream, data.content ?? '');
     if (wasPinned) logsViewEl.scrollTop = logsViewEl.scrollHeight;
     if (ctxMeta && activeId) ctxMeta.textContent = `session ${activeId.slice(0, 8)} · ${data.path ?? ''}`;
   } catch (e) {
@@ -1288,28 +1556,48 @@ async function refreshLogs(): Promise<void> {
 
 function formatLogs(stream: string, raw: string): string {
   if (!raw) return '';
-  if (stream === 'transcript') return raw;
+  // Transcript logs are pre-rendered text — escape and return as-is so the
+  // browser doesn't try to interpret stray < or & characters.
+  if (stream === 'transcript') return escapeHtml(raw);
+
   const out: string[] = [];
   for (const line of raw.split('\n')) {
     const s = line.trim();
     if (!s) continue;
     try {
-      const obj = JSON.parse(s);
-      if (obj && typeof obj === 'object' && 'ts' in obj && typeof (obj as { ts: unknown }).ts === 'number') {
-        const ts = (obj as { ts: number }).ts;
-        const iso = new Date(ts).toISOString().replace('T', ' ').slice(0, 23);
-        const rest: Record<string, unknown> = { ...(obj as Record<string, unknown>) };
-        delete rest.ts;
-        out.push(`[${iso}]\n${JSON.stringify(rest, null, 2)}`);
-      } else {
-        out.push(JSON.stringify(obj, null, 2));
-      }
+      const obj = JSON.parse(s) as Record<string, unknown>;
+      const kind = typeof obj.kind === 'string' ? obj.kind : '';
+      const cssClass = kindToClass(kind);
+      const tsNum = typeof obj.ts === 'number' ? obj.ts : null;
+      const iso = tsNum != null ? new Date(tsNum).toISOString().replace('T', ' ').slice(0, 23) : '';
+      const rest: Record<string, unknown> = { ...obj };
+      delete rest.ts;
+      const header = iso ? `<span class="ev-ts">[${escapeHtml(iso)}]</span>` : '';
+      const kindLabel = kind ? `<span class="ev-kind">${escapeHtml(kind)}</span>` : '';
+      const body = escapeHtml(JSON.stringify(rest, null, 2));
+      out.push(`<div class="ev ${cssClass}">${header}${kindLabel}<pre>${body}</pre></div>`);
     } catch {
-      out.push(s);
+      out.push(`<div class="ev ev-raw"><pre>${escapeHtml(s)}</pre></div>`);
     }
-    out.push('');
   }
-  return out.join('\n');
+  return out.join('');
+}
+
+/**
+ * Map a JSONL `kind` string to the CSS class that drives its colour. Keeps
+ * one source of truth so the renderer never invents class names that have
+ * no matching style. Unknown kinds fall back to `ev-default`.
+ */
+function kindToClass(kind: string): string {
+  if (!kind) return 'ev-default';
+  if (kind.includes('error') || kind.includes('failed')) return 'ev-error';
+  if (kind.includes('user.message')) return 'ev-user';
+  if (kind.includes('assistant.turn_start') || kind.includes('assistant.message') || kind.includes('assistant.turn_end')) return 'ev-assistant';
+  if (kind.includes('tool')) return 'ev-tool';
+  if (kind.includes('permission') || kind.includes('ask_user')) return 'ev-needs-input';
+  if (kind.includes('hook')) return 'ev-hook';
+  if (kind.includes('session') || kind.includes('system') || kind.includes('context')) return 'ev-system';
+  return 'ev-default';
 }
 
 function isPinnedToBottom(el: HTMLElement): boolean {
