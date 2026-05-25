@@ -1,13 +1,52 @@
-// Web Audio synthesized chimes. Three distinct timbres so they're
-// instantly distinguishable without volume cranked:
+// macOS system-sound chime engine. Replaces the older synth oscillator
+// implementation now that we transcode the system AIFFs server-side
+// (see /api/system-sound/*). The picker page (chimes.html) walks the user
+// through auditioning every sound — the mapping below is what they picked.
 //
-//   needs-input    — UNRESOLVED ascending 1–3–5 (C E G), hangs on the 5
-//                    so it feels like a question waiting for an answer.
-//   agent-finished — RESOLVED 1–3–5–1 (C E G C), classic major-octave
-//                    cadence — "I'm done, ready for you".
-//   error          — descending minor semitone (gentle alert, not jarring).
+// All sounds are loaded lazily on first play, decoded via Web Audio's
+// `decodeAudioData`, then cached as `AudioBuffer`s for instant replay.
+// Chromium browsers can't decode AIFF directly, but the server transcodes
+// to FLLR-stripped 16-bit LE PCM WAV which decodes everywhere.
+//
+// The picker assigns one chime per "kind" — a logical event class. The
+// dispatcher (alertDispatcher.ts) picks the kind, this module just plays it.
+//
+// IMPORTANT: keep this set in sync with `AlertKind` in alertDispatcher.ts.
 
-export type ChimeKind = 'needs-input' | 'agent-finished' | 'error';
+export type ChimeKind =
+  | 'needs-input'      // generic "I need a human" (fallback when cause unknown)
+  | 'agent-finished'   // turn complete, ready for next prompt
+  | 'error'            // session went into error state
+  | 'ask-user'         // agent invoked the ask_user interactive tool
+  | 'permission'       // permission.requested gate awaiting approval
+  | 'elicitation'      // elicitation.requested prompt
+  | 'session-spawned'  // user just started a new minion
+  | 'session-resumed'  // user resumed a dormant minion
+  | 'session-stopped'  // session ended (clean exit or close)
+  | 'tool-failed';     // a single tool call failed (session keeps running)
+
+// User-picked mapping (May 2026, via chimes.html picker). Each value is the
+// macOS system sound name (no extension); we resolve it through
+// /api/system-sound/system/<name>.aiff which transcodes on demand.
+const CHIME_MAP: Record<ChimeKind, string | null> = {
+  'needs-input': 'Hero',
+  'agent-finished': 'Submarine',
+  'error': 'Sosumi',
+  'ask-user': 'Hero',
+  'permission': 'Purr',
+  'elicitation': 'Funk',
+  'session-spawned': 'Blow',
+  'session-resumed': 'Blow',
+  'session-stopped': 'Bottle',
+  'tool-failed': 'Ping',
+};
+
+// Per-kind gain. macOS system sounds vary wildly in loudness — Submarine
+// is gentle, Sosumi is sharp. Adjust here if any feel out of balance; the
+// goal is roughly equal perceived loudness for a normal listening level.
+const CHIME_GAIN: Partial<Record<ChimeKind, number>> = {
+  // 1.0 = nominal; below 1 reduces, above 1 boosts (use sparingly).
+};
 
 let ctx: AudioContext | null = null;
 function ac(): AudioContext {
@@ -18,72 +57,96 @@ function ac(): AudioContext {
   }
   return ctx;
 }
-
-function note(freq: number, startAt: number, durSec: number, gain = 0.18, type: OscillatorType = 'sine') {
+async function unlockedAc(): Promise<AudioContext> {
   const a = ac();
-  const osc = a.createOscillator();
-  const g = a.createGain();
-  osc.type = type;
-  osc.frequency.value = freq;
-  osc.connect(g);
-  g.connect(a.destination);
-  // ADSR-ish envelope: quick attack, smooth release
-  const t0 = a.currentTime + startAt;
-  g.gain.setValueAtTime(0.0001, t0);
-  g.gain.exponentialRampToValueAtTime(gain, t0 + 0.015);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
-  osc.start(t0);
-  osc.stop(t0 + durSec + 0.05);
+  if (a.state === 'suspended') {
+    try { await a.resume(); } catch { /* ignore */ }
+  }
+  return a;
+}
+
+// Decoded AudioBuffers keyed by sound name. The fetch + decode happens once
+// per page load per sound, then play() is a synchronous BufferSource start.
+const bufferCache = new Map<string, AudioBuffer>();
+const inflight = new Map<string, Promise<AudioBuffer>>();
+
+async function loadBuffer(name: string): Promise<AudioBuffer> {
+  const cached = bufferCache.get(name);
+  if (cached) return cached;
+  const pending = inflight.get(name);
+  if (pending) return pending;
+  const a = ac();
+  const url = `/api/system-sound/system/${encodeURIComponent(name)}.aiff`;
+  // cache: 'reload' bypasses any stale browser disk entry from a previous
+  // deploy that served raw AIFF — the modern server always returns WAV.
+  const p = fetch(url, { cache: 'reload' })
+    .then(async (r) => {
+      if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`);
+      const ab = await r.arrayBuffer();
+      return await new Promise<AudioBuffer>((resolve, reject) => {
+        try {
+          const ret = a.decodeAudioData(ab, resolve, reject);
+          if (ret && typeof ret.then === 'function') ret.then(resolve, reject);
+        } catch (e) { reject(e); }
+      });
+    })
+    .then((buf) => {
+      bufferCache.set(name, buf);
+      inflight.delete(name);
+      return buf;
+    })
+    .catch((e) => {
+      inflight.delete(name);
+      throw e;
+    });
+  inflight.set(name, p);
+  return p;
 }
 
 let lastPlayedAt = 0;
 // Per-page-load guard against literal-overlap; the real "one alert per event"
-// dedup happens upstream in the debouncer in app.ts. This just keeps two
-// chimes from playing simultaneously if two different sessions happen to
-// settle in the same animation frame.
-const MIN_GAP_MS = 100;
+// dedup happens upstream in the debouncer in alertDispatcher.ts. This just
+// keeps two chimes from playing simultaneously if two different sessions
+// happen to settle in the same animation frame.
+const MIN_GAP_MS = 80;
 
 export function playChime(kind: ChimeKind): void {
-  // Throttle so a burst of events doesn't spam audio.
   const now = Date.now();
   if (now - lastPlayedAt < MIN_GAP_MS) return;
   lastPlayedAt = now;
 
-  try {
-    const a = ac();
-    if (a.state === 'suspended') a.resume().catch(() => { /* ignore */ });
-    switch (kind) {
-      case 'needs-input':
-        // UNRESOLVED: 1–3–5 ascending (C E G) — hangs on the 5th, feels like
-        // a question. Same intervals as agent-finished but missing the
-        // octave resolution, so the two kinds are obviously related cousins.
-        note(523.25, 0.0,  0.16, 0.14, 'triangle');
-        note(659.25, 0.10, 0.16, 0.14, 'triangle');
-        note(783.99, 0.20, 0.34, 0.16, 'triangle');
-        break;
-      case 'agent-finished':
-        // RESOLVED: 1–3–5–1 (C E G C) major arpeggio with octave landing.
-        note(523.25, 0.0,  0.16, 0.14, 'triangle');
-        note(659.25, 0.10, 0.16, 0.14, 'triangle');
-        note(783.99, 0.20, 0.16, 0.14, 'triangle');
-        note(1046.5, 0.30, 0.34, 0.16, 'triangle');
-        break;
-      case 'error':
-        // Descending minor: A4 → F4 (440 → 349) with a softer square for "alert" character
-        note(440, 0.0, 0.22, 0.16, 'square');
-        note(349.23, 0.20, 0.36, 0.16, 'square');
-        break;
+  const soundName = CHIME_MAP[kind];
+  if (!soundName) return; // mapped to silence — fine.
+
+  // Fire-and-forget — we don't want a slow decode to block the UI thread
+  // or hold up the dispatcher. Errors are logged and swallowed.
+  (async () => {
+    try {
+      const a = await unlockedAc();
+      const buf = await loadBuffer(soundName);
+      const src = a.createBufferSource();
+      src.buffer = buf;
+      const g = a.createGain();
+      g.gain.value = CHIME_GAIN[kind] ?? 0.9;
+      src.connect(g);
+      g.connect(a.destination);
+      src.start();
+    } catch (e) {
+      console.warn('[chime] play failed:', kind, soundName, e);
     }
-  } catch (e) {
-    console.warn('[chime] failed:', e);
-  }
+  })();
 }
 
 export function unlockAudio(): void {
-  // Browsers require a user gesture before audio can play. Call this from
-  // a click handler to pre-warm the AudioContext.
-  try {
-    const a = ac();
-    if (a.state === 'suspended') a.resume().catch(() => { /* ignore */ });
-  } catch { /* ignore */ }
+  // Pre-warm the AudioContext on first user gesture so the very first chime
+  // doesn't lose its envelope to the resume() race. Also kicks off a fetch
+  // for the most common chime so playback is instant on first event.
+  void unlockedAc().then(() => {
+    // Speculatively prefetch the highest-frequency chimes.
+    const warm: ChimeKind[] = ['agent-finished', 'needs-input', 'ask-user'];
+    for (const k of warm) {
+      const name = CHIME_MAP[k];
+      if (name) loadBuffer(name).catch(() => { /* ignore prefetch errors */ });
+    }
+  });
 }

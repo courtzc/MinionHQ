@@ -1,8 +1,9 @@
 // Per-session alert dispatcher. Solves the "two chimes per event / sometimes
 // zero chimes / spurious agent-finished on spawn" cluster of bugs by:
 //
-//   1. Owning the (prev,status)→kind decision in ONE place, with explicit
-//      rules — most importantly, `spawning → idle` is NOT "agent finished".
+//   1. Owning the (prev,status,cause)→kind decision in ONE place, with
+//      explicit rules — most importantly, `spawning → idle` is NOT
+//      "agent finished".
 //   2. Coalescing rapid transitions inside a settle window (default 500ms).
 //      The agent often emits `working → idle → needs-input` within ~150ms;
 //      we want ONE chime + ONE OS notification for that whole burst, of the
@@ -15,35 +16,61 @@
 // or whether a session has been popped out — that gating happens in the
 // caller. Keep this module pure-ish and predictable.
 
-import type { SessionStatus } from '../shared/protocol.js';
+import type { SessionStatus, InputCause } from '../shared/protocol.js';
 
-export type AlertKind = 'needs-input' | 'agent-finished' | 'error';
+export type AlertKind =
+  | 'needs-input'
+  | 'agent-finished'
+  | 'error'
+  | 'ask-user'
+  | 'permission'
+  | 'elicitation'
+  | 'session-spawned'
+  | 'session-resumed'
+  | 'session-stopped'
+  | 'tool-failed';
 
 /**
- * Map a status transition to an alert kind, or `null` if no alert.
+ * Map a status transition (+ optional InputCause) to an alert kind, or `null`.
  *
  * Rules:
- *  - Any transition INTO `needs-input` (from anything except needs-input) →ungroup needs-input.
- *  - Any transition INTO `error` (from anything except error) → error.
- *  - `working → idle` → agent-finished (the agent completed a turn).
- *  - `spawning → idle` → NO alert. The agent is just done starting up.
+ *  - Any transition INTO `needs-input` → either the cause-specific kind
+ *    (ask-user / permission / elicitation) if known, else generic needs-input.
+ *  - Any transition INTO `error` → error.
+ *  - `working → idle` → agent-finished.
+ *  - `spawning → idle` → NO alert (the agent is just done starting up; a
+ *    separate session-spawned chime is fired by the lifecycle path).
  *  - Same-state transitions → no alert.
- *  - Everything else (idle → working, working → needs-input handled above,
- *    error → idle, exited → anything) → no alert.
  */
-export function alertKindFor(prev: SessionStatus, next: SessionStatus): AlertKind | null {
+export function alertKindFor(prev: SessionStatus, next: SessionStatus, cause?: InputCause): AlertKind | null {
   if (prev === next) return null;
-  if (next === 'needs-input') return 'needs-input';
+  if (next === 'needs-input') {
+    if (cause === 'ask-user') return 'ask-user';
+    if (cause === 'permission') return 'permission';
+    if (cause === 'elicitation') return 'elicitation';
+    return 'needs-input';
+  }
   if (next === 'error') return 'error';
   if (next === 'idle' && prev === 'working') return 'agent-finished';
   return null;
 }
 
-// Higher number wins inside the settle window.
+// Higher number wins inside the settle window. needs-input variants share
+// the same tier — within a single burst the latest cause wins (no upgrade /
+// downgrade). Error always trumps. Lifecycle chimes (spawned/resumed/stopped)
+// are NOT routed through the dispatcher (they're fired directly), so they
+// don't appear here.
 const PRIORITY: Record<AlertKind, number> = {
-  error: 3,
-  'needs-input': 2,
+  error: 5,
+  'needs-input': 3,
+  'ask-user': 3,
+  'permission': 3,
+  'elicitation': 3,
+  'tool-failed': 2,
   'agent-finished': 1,
+  'session-spawned': 0,
+  'session-resumed': 0,
+  'session-stopped': 0,
 };
 
 export interface DispatcherOpts {
@@ -80,10 +107,23 @@ export class AlertDispatcher {
    * dispatcher schedules a fire after the settle window, replacing any
    * pending alert for the same session with the higher-priority kind.
    */
-  onTransition(id: string, prev: SessionStatus, next: SessionStatus): void {
-    const kind = alertKindFor(prev, next);
+  onTransition(id: string, prev: SessionStatus, next: SessionStatus, cause?: InputCause): void {
+    const kind = alertKindFor(prev, next, cause);
     if (!kind) return;
+    this.enqueue(id, kind);
+  }
 
+  /**
+   * Out-of-band alert for events that don't correspond to a status transition
+   * (e.g., a single tool call failed but the session keeps running). Goes
+   * through the same coalescing + priority logic so we still avoid double
+   * chimes when a tool failure and a status transition collide.
+   */
+  signal(id: string, kind: AlertKind): void {
+    this.enqueue(id, kind);
+  }
+
+  private enqueue(id: string, kind: AlertKind): void {
     const existing = this.pending.get(id);
     let winner = kind;
     if (existing) {

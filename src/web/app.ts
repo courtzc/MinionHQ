@@ -1,6 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import type { ClientMsg, ServerMsg, SessionMeta, SessionStatus } from '../shared/protocol.js';
+import type { ClientMsg, ServerMsg, SessionMeta, SessionStatus, InputCause } from '../shared/protocol.js';
 import { playChime, unlockAudio } from './chimes.js';
 import { ensurePermission, notify } from './notify.js';
 import { colorForRepo } from './repoColors.js';
@@ -165,11 +165,27 @@ function handleServerMsg(msg: ServerMsg) {
       if (IS_POPOUT && msg.session.id !== POPOUT_ID) break;
       // Treat session.created as "this session is now live (or resumed)" —
       // ensureTab is idempotent, and we want to attach even if a tab exists.
-      ensureTab(msg.session, true);
+      {
+        const wasResumed = recentlyResumedIds.delete(msg.session.id);
+        ensureTab(msg.session, true);
+        // Lifecycle chime — fired directly (not via the dispatcher) since this
+        // doesn't correspond to a status transition.
+        if (chimesEnabled && !poppedOutSessions.has(msg.session.id)) {
+          playChime(wasResumed ? 'session-resumed' : 'session-spawned');
+        }
+      }
       break;
     case 'session.status':
-      updateStatus(msg.id, msg.status);
+      updateStatus(msg.id, msg.status, msg.cause);
       break;
+    case 'session.tool_failed': {
+      // A single tool call failed but the session keeps running — distinct
+      // chime so we don't conflate with full session errors. Goes through the
+      // dispatcher so it coalesces with any near-simultaneous status change.
+      if (poppedOutSessions.has(msg.id)) break;
+      alertDispatcher.signal(msg.id, 'tool-failed');
+      break;
+    }
     case 'pty.data': {
       // Legacy JSON path — server prefers binary frames now. Decode for safety.
       const t = tabs.get(msg.id);
@@ -186,6 +202,11 @@ function handleServerMsg(msg: ServerMsg) {
       if (t) {
         t.term.writeln(`\r\n\x1b[2m[process exited code=${msg.code} signal=${msg.signal}]\x1b[0m`);
         updateStatus(msg.id, 'exited');
+        // Lifecycle chime — fired directly (skip the dispatcher, which only
+        // handles status-transition alert kinds). Suppress for popouts.
+        if (chimesEnabled && !poppedOutSessions.has(msg.id)) {
+          playChime('session-stopped');
+        }
       }
       break;
     }
@@ -473,6 +494,15 @@ function restoreActiveFromLS() {
  */
 const poppedOutSessions = new Set<string>();
 
+/**
+ * IDs the user just clicked "resume" on. Populated when we send a
+ * `session.resume` ClientMsg, drained when the matching `session.created`
+ * arrives — at which point we know to fire `session-resumed` instead of
+ * `session-spawned`. Without this we can't tell the two apart from the
+ * client side (both surface as `session.created`).
+ */
+const recentlyResumedIds = new Set<string>();
+
 function popOutSession(id: string): void {
   poppedOutSessions.add(id);
   // Cancel any in-flight alert so we don't get a stale chime/notify right
@@ -619,7 +649,7 @@ function showTabContextMenu(id: string, x: number, y: number): void {
   });
 }
 
-function updateStatus(id: string, status: SessionStatus) {
+function updateStatus(id: string, status: SessionStatus, cause?: InputCause) {
   const t = tabs.get(id);
   if (!t) return;
   const prev = t.meta.status;
@@ -640,8 +670,10 @@ function updateStatus(id: string, status: SessionStatus) {
 
   // Hand the transition to the dispatcher. It will coalesce rapid bursts
   // (e.g. working → idle → needs-input within 150ms) into ONE alert of the
-  // highest-priority kind, and will NOT fire on spawning → idle.
-  alertDispatcher.onTransition(id, prev, status);
+  // highest-priority kind, and will NOT fire on spawning → idle. The
+  // optional `cause` lets it pick a more specific chime (ask-user vs
+  // permission vs elicitation, etc).
+  alertDispatcher.onTransition(id, prev, status, cause);
 }
 
 // Singleton alert dispatcher. The `fire` callback is the ONLY place chimes
@@ -905,6 +937,7 @@ async function openResumePicker(): Promise<void> {
           <div class="resume-row-sub">${escapeHtml(s.id.slice(0, 8))} · ${s.copilotSessionId ? 'copilot session ' + escapeHtml(s.copilotSessionId.slice(0, 8)) : 'no copilot id (will use --continue)'}</div>
         `;
         row.addEventListener('click', () => {
+          recentlyResumedIds.add(s.id);
           sendMsg({ t: 'session.resume', id: s.id });
           cleanup();
         });

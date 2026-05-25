@@ -14,7 +14,7 @@ import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
 import { LIMITS } from './limits.js';
-import { notifyMac, isMacNotifySupported } from './macNotify.js';
+import { notifyMac, isMacNotifySupported, type MacNotifyKind } from './macNotify.js';
 import {
   ensureRepoContext,
   listRepoContextFiles,
@@ -34,6 +34,7 @@ import {
   type ClientMsg,
   type ServerMsg,
   type SessionStatus,
+  type InputCause,
 } from '../shared/protocol.js';
 
 ensureDirs();
@@ -170,6 +171,13 @@ const WAV_CACHE_DIR = join(tmpdir(), 'minionhq-wav-cache');
 // transparently invalidated (e.g. v1 → v2 added FLLR-chunk stripping).
 const WAV_CACHE_VERSION = 'v2';
 const wavCache = new Map<string, string>(); // src abs path → cached wav path
+
+const VALID_NOTIFY_KINDS = new Set<string>([
+  'needs-input', 'agent-finished', 'error',
+  'ask-user', 'permission', 'elicitation',
+  'session-spawned', 'session-resumed', 'session-stopped',
+  'tool-failed',
+]);
 function transcodeToWav(srcAbsPath: string): string | null {
   try {
     const st = statSync(srcAbsPath);
@@ -388,11 +396,11 @@ const httpServer = createServer(async (req, res) => {
       try {
         const body = await readJsonBody<{ kind?: string; sessionLabel?: string | null; body?: string; openUrl?: string }>(req);
         const kind = body.kind;
-        if (kind !== 'needs-input' && kind !== 'agent-finished' && kind !== 'error') {
-          return jsonErr(res, 400, 'kind must be needs-input | agent-finished | error');
+        if (typeof kind !== 'string' || !VALID_NOTIFY_KINDS.has(kind)) {
+          return jsonErr(res, 400, 'invalid notify kind');
         }
         const transport = await notifyMac({
-          kind,
+          kind: kind as MacNotifyKind,
           sessionLabel: body.sessionLabel ?? null,
           body: body.body,
           openUrl: body.openUrl,
@@ -654,10 +662,16 @@ sessionManager.on('exit', ({ id, exitCode, signal }: { id: string; exitCode: num
   }
 });
 
-sessionManager.on('status', ({ id, status }: { id: string; status: SessionStatus }) => {
+sessionManager.on('status', ({ id, status, cause }: { id: string; status: SessionStatus; cause?: InputCause }) => {
   // Broadcast status to all sockets so the tab list / chime engine can react
   // even when the user isn't actively attached to the tab.
-  broadcast({ t: 'session.status', id, status });
+  broadcast({ t: 'session.status', id, status, ...(cause ? { cause } : {}) });
+});
+
+sessionManager.on('tool_failed', ({ id, tool }: { id: string; tool?: string }) => {
+  // Side-channel signal — a single tool call returned failure but the
+  // session is still running. The dashboard plays its tool-failed chime.
+  broadcast({ t: 'session.tool_failed', id, ...(tool ? { tool } : {}) });
 });
 
 httpServer.listen(DEFAULTS.port, DEFAULTS.host, () => {

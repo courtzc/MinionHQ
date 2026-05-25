@@ -19,7 +19,17 @@ import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 
-export type MacNotifyKind = 'needs-input' | 'agent-finished' | 'error';
+export type MacNotifyKind =
+  | 'needs-input'
+  | 'agent-finished'
+  | 'error'
+  | 'ask-user'
+  | 'permission'
+  | 'elicitation'
+  | 'session-spawned'
+  | 'session-resumed'
+  | 'session-stopped'
+  | 'tool-failed';
 
 const IS_DARWIN = process.platform === 'darwin';
 
@@ -42,23 +52,40 @@ async function detect(): Promise<void> {
 }
 
 /**
- * Sound names are macOS system sounds in /System/Library/Sounds. We pick
- * distinct ones per kind so the audio cue matches the chime kind in-browser.
+ * macOS system sound names (without extension). Mirrors the user-picked
+ * chime mapping in src/web/chimes.ts so the OS toast plays the same sound
+ * the browser plays via Web Audio. Both `chimes` and `notifications`
+ * toggles are independent in the UI — when both are on, the user hears
+ * the same sound once from the browser and once from Notification Center.
  */
 function soundFor(kind: MacNotifyKind): string {
   switch (kind) {
-    case 'needs-input':    return 'Tink';
-    case 'agent-finished': return 'Glass';
-    case 'error':          return 'Basso';
+    case 'needs-input':     return 'Hero';
+    case 'agent-finished':  return 'Submarine';
+    case 'error':           return 'Sosumi';
+    case 'ask-user':        return 'Hero';
+    case 'permission':      return 'Purr';
+    case 'elicitation':     return 'Funk';
+    case 'session-spawned': return 'Blow';
+    case 'session-resumed': return 'Blow';
+    case 'session-stopped': return 'Bottle';
+    case 'tool-failed':     return 'Ping';
   }
 }
 
 function titleFor(kind: MacNotifyKind, sessionLabel: string | null): string {
   const tag = sessionLabel ? ` — ${sessionLabel}` : '';
   switch (kind) {
-    case 'needs-input':    return `MinionHQ: needs input${tag}`;
-    case 'agent-finished': return `MinionHQ: agent finished${tag}`;
-    case 'error':          return `MinionHQ: error${tag}`;
+    case 'needs-input':     return `MinionHQ: needs input${tag}`;
+    case 'ask-user':        return `MinionHQ: agent has a question${tag}`;
+    case 'permission':      return `MinionHQ: permission required${tag}`;
+    case 'elicitation':     return `MinionHQ: input requested${tag}`;
+    case 'agent-finished':  return `MinionHQ: agent finished${tag}`;
+    case 'error':           return `MinionHQ: error${tag}`;
+    case 'tool-failed':     return `MinionHQ: tool failed${tag}`;
+    case 'session-spawned': return `MinionHQ: session started${tag}`;
+    case 'session-resumed': return `MinionHQ: session resumed${tag}`;
+    case 'session-stopped': return `MinionHQ: session stopped${tag}`;
   }
 }
 

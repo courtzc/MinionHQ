@@ -12,7 +12,7 @@ import { LIMITS } from './limits.js';
 import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
 import { setupWorktreeContext, appendTranscriptIndex } from './context.js';
 import { RingBuffer } from './ringBuffer.js';
-import type { SessionMeta, SessionStatus } from '../shared/protocol.js';
+import type { SessionMeta, SessionStatus, InputCause } from '../shared/protocol.js';
 
 const REPLAY_MAX = 256 * 1024;
 const SESSION_STATE_ROOT = join(homedir(), '.copilot', 'session-state');
@@ -555,7 +555,7 @@ class SessionManager extends EventEmitter {
     try { s.pty.kill(); } catch { /* ignore */ }
   }
 
-  setStatus(id: string, status: SessionStatus): void {
+  setStatus(id: string, status: SessionStatus, cause?: InputCause): void {
     const s = this.sessions.get(id);
     if (!s) return;
     if (s.meta.status === status) return;
@@ -565,7 +565,7 @@ class SessionManager extends EventEmitter {
       db().prepare('UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?')
         .run(status, s.meta.updatedAt, id);
     } catch { /* ignore */ }
-    this.emit('status', { id, status });
+    this.emit('status', { id, status, cause });
   }
 
   // ─── JSONL sidecar ────────────────────────────────────────────────────────
@@ -706,13 +706,23 @@ class SessionManager extends EventEmitter {
         // ask_user is the agent's interactive picker tool — it blocks the turn
         // waiting on user input but doesn't emit permission.requested. Treat it
         // the same way: flip to needs-input so chime + OS notification fire.
-        if (INTERACTIVE_TOOLS.has(name)) this.setStatus(id, 'needs-input');
+        if (INTERACTIVE_TOOLS.has(name)) this.setStatus(id, 'needs-input', 'ask-user');
         break;
       }
       case 'tool.execution_complete': {
         const callId = String(data.toolCallId ?? data.id ?? '');
         const entry = s.toolStartTs.get(callId);
         s.toolStartTs.delete(callId);
+        // Tool-level failure (success=false / error / status='error') —
+        // emit a side-channel event the dashboard maps to its tool-failed
+        // chime. We deliberately don't change session status here: a single
+        // failed tool shouldn't move the whole session into the error state.
+        const success = data.success;
+        const status = String(data.status ?? '');
+        const failed = success === false || status === 'error' || status === 'failed';
+        if (failed) {
+          this.emit('tool_failed', { id, tool: entry?.name });
+        }
         if (entry && INTERACTIVE_TOOLS.has(entry.name)) {
           // The user just picked — return to "working" while the agent
           // processes the answer, and tell the next turn_end to stay quiet
@@ -723,10 +733,21 @@ class SessionManager extends EventEmitter {
         break;
       }
       case 'permission.requested':
-        this.setStatus(id, 'needs-input');
+        this.setStatus(id, 'needs-input', 'permission');
         break;
       case 'permission.completed':
         // Status will normalise on the next turn boundary (turn_end).
+        if (s.meta.status === 'needs-input') this.setStatus(id, 'working');
+        break;
+      case 'elicitation.requested':
+      case 'elicitation.start':
+        // The CLI may emit elicitation events for richer prompts (forms etc).
+        // Treat the same as a needs-input transition but with a distinct cause
+        // so the dashboard plays the elicitation-specific chime.
+        this.setStatus(id, 'needs-input', 'elicitation');
+        break;
+      case 'elicitation.completed':
+      case 'elicitation.end':
         if (s.meta.status === 'needs-input') this.setStatus(id, 'working');
         break;
       case 'abort':
