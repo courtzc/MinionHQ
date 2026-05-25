@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync, mkdirSync } from 'node:fs';
 import { join, resolve, extname, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import * as esbuild from 'esbuild';
@@ -155,6 +157,38 @@ async function bundleApp(): Promise<string> {
   } catch (e) {
     const msg = (e as Error).message.replace(/`/g, '');
     return `document.body.innerText = \`build error: ${msg}\`;`;
+  }
+}
+
+// ─── AIFF → WAV transcoder cache ─────────────────────────────────────────────
+// Chromium-based browsers (Chrome, Edge) can't decode AIFF or CAF. We use
+// macOS's bundled `afconvert` to transcode on first request, then cache the
+// WAV in tmpdir keyed by source path + mtime. Cache survives within the
+// process lifetime; on restart we re-transcode (small files, fast).
+const WAV_CACHE_DIR = join(tmpdir(), 'minionhq-wav-cache');
+const wavCache = new Map<string, string>(); // src abs path → cached wav path
+function transcodeToWav(srcAbsPath: string): string | null {
+  try {
+    const st = statSync(srcAbsPath);
+    const key = `${srcAbsPath}::${st.mtimeMs}::${st.size}`;
+    const cached = wavCache.get(key);
+    if (cached && existsSync(cached)) return cached;
+    if (!existsSync(WAV_CACHE_DIR)) mkdirSync(WAV_CACHE_DIR, { recursive: true });
+    // Filename: sanitised base + content hash-ish suffix so collisions are unlikely.
+    const safe = srcAbsPath.replace(/[^A-Za-z0-9._-]/g, '_').slice(-80);
+    const out = join(WAV_CACHE_DIR, `${safe}.${st.mtimeMs}.wav`);
+    if (!existsSync(out)) {
+      // afconvert: -f WAVE (container), -d LEI16 (16-bit little-endian PCM, the
+      // safest WAV subformat for browser Web Audio decoders).
+      execFileSync('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16', srcAbsPath, out], {
+        stdio: 'ignore',
+      });
+    }
+    wavCache.set(key, out);
+    return out;
+  } catch (e) {
+    console.warn('[system-sound] transcode failed:', srcAbsPath, (e as Error).message);
+    return null;
   }
 }
 
@@ -418,12 +452,25 @@ const httpServer = createServer(async (req, res) => {
       }
       const full = join(root, file);
       if (full.startsWith(root) && existsSync(full)) {
-        const ct = file.toLowerCase().endsWith('.aiff') || file.toLowerCase().endsWith('.aif')
-          ? 'audio/aiff'
-          : file.toLowerCase().endsWith('.wav') ? 'audio/wav'
-          : file.toLowerCase().endsWith('.mp3') ? 'audio/mpeg'
-          : file.toLowerCase().endsWith('.m4a') ? 'audio/mp4'
-          : 'audio/x-caf';
+        const lower = file.toLowerCase();
+        const isAiff = lower.endsWith('.aiff') || lower.endsWith('.aif') || lower.endsWith('.caf');
+        // Chromium-family browsers (Chrome, Edge) can't decode AIFF/CAF in
+        // either <audio> or Web Audio. Transcode to WAV via afconvert (ships
+        // with macOS) and cache the result. WAV decode is universal.
+        if (isAiff) {
+          const wav = transcodeToWav(full);
+          if (wav) {
+            res.setHeader('Content-Type', 'audio/wav');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.end(readFileSync(wav));
+          }
+          // Fall through to raw bytes if transcode unexpectedly fails.
+        }
+        const ct = lower.endsWith('.wav') ? 'audio/wav'
+          : lower.endsWith('.mp3') ? 'audio/mpeg'
+          : lower.endsWith('.m4a') ? 'audio/mp4'
+          : lower.endsWith('.caf') ? 'audio/x-caf'
+          : 'audio/aiff';
         res.setHeader('Content-Type', ct);
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.end(readFileSync(full));
