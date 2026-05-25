@@ -89,6 +89,33 @@ const wsAttachments = new WeakMap<WebSocket, Map<string, () => void>>();
 const attachedSockets = new Map<string, Set<WebSocket>>();
 const allSockets = new Set<WebSocket>();
 
+/**
+ * Per-session map of {socket → {cols, rows}} tracking each attached client's
+ * desired PTY size. A session's PTY is sized to `min(cols)` × `min(rows)` over
+ * all attached sockets so the smallest viewer always sees correctly-formatted
+ * output. Larger windows simply render the smaller PTY with whitespace on the
+ * right — far better than the previous "last writer wins" behaviour where
+ * popout windows received content baked for the larger main-window cols and
+ * wrapped catastrophically.
+ */
+const ptySizesPerSession = new Map<
+  string,
+  Map<WebSocket, { cols: number; rows: number }>
+>();
+
+function recomputePtySize(sessionId: string): void {
+  const m = ptySizesPerSession.get(sessionId);
+  if (!m || m.size === 0) return;
+  let cols = Infinity;
+  let rows = Infinity;
+  for (const sz of m.values()) {
+    if (sz.cols < cols) cols = sz.cols;
+    if (sz.rows < rows) rows = sz.rows;
+  }
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
+  sessionManager.resize(sessionId, cols, rows);
+}
+
 function broadcast(msg: ServerMsg) {
   for (const ws of allSockets) send(ws, msg);
 }
@@ -637,7 +664,12 @@ wss.on('connection', (ws) => {
         }
         break;
       case 'pty.resize':
-        sessionManager.resize(msg.id, msg.cols, msg.rows);
+        {
+          let m = ptySizesPerSession.get(msg.id);
+          if (!m) { m = new Map(); ptySizesPerSession.set(msg.id, m); }
+          m.set(ws, { cols: msg.cols, rows: msg.rows });
+          recomputePtySize(msg.id);
+        }
         break;
       default:
         send(ws, { t: 'error', message: `unknown message: ${(msg as { t: string }).t}` });
@@ -650,6 +682,14 @@ wss.on('connection', (ws) => {
       for (const [sessionId, unsub] of map.entries()) {
         try { unsub(); } catch { /* ignore */ }
         attachedSockets.get(sessionId)?.delete(ws);
+        // Drop this socket's requested PTY size and recompute. If it was the
+        // smallest viewer, the PTY can now grow to fit the remaining clients.
+        const sizes = ptySizesPerSession.get(sessionId);
+        if (sizes) {
+          sizes.delete(ws);
+          if (sizes.size === 0) ptySizesPerSession.delete(sessionId);
+          else recomputePtySize(sessionId);
+        }
       }
     }
     wsAttachments.delete(ws);
@@ -664,6 +704,8 @@ sessionManager.on('exit', ({ id, exitCode, signal }: { id: string; exitCode: num
     for (const ws of bucket) send(ws, msg);
     attachedSockets.delete(id);
   }
+  // Session is gone — drop tracked PTY sizes so we don't leak entries.
+  ptySizesPerSession.delete(id);
 });
 
 sessionManager.on('status', ({ id, status, cause }: { id: string; status: SessionStatus; cause?: InputCause }) => {
