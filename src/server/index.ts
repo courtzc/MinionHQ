@@ -348,6 +348,51 @@ const httpServer = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     return res.end(code);
   }
+  // Serve macOS system sounds + user sounds so the chime picker can preview them.
+  if (url.pathname === '/api/system-sounds') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    const dirs = [
+      { url: 'system', fs: '/System/Library/Sounds' },
+      { url: 'user',   fs: `${process.env.HOME ?? ''}/Library/Sounds` },
+    ];
+    const out: Array<{ id: string; name: string; url: string; source: string }> = [];
+    for (const d of dirs) {
+      try {
+        for (const f of readdirSync(d.fs)) {
+          if (!/\.(aiff?|wav|mp3|m4a|caf)$/i.test(f)) continue;
+          const name = f.replace(/\.[^.]+$/, '');
+          out.push({ id: `${d.url}-${name}`, name, url: `/api/system-sound/${d.url}/${encodeURIComponent(f)}`, source: d.url });
+        }
+      } catch { /* directory missing — fine */ }
+    }
+    return res.end(JSON.stringify({ ok: true, sounds: out }));
+  }
+  if (url.pathname.startsWith('/api/system-sound/')) {
+    const parts = url.pathname.slice('/api/system-sound/'.length).split('/');
+    if (parts.length === 2 && (parts[0] === 'system' || parts[0] === 'user')) {
+      const root = parts[0] === 'system' ? '/System/Library/Sounds' : `${process.env.HOME ?? ''}/Library/Sounds`;
+      const file = decodeURIComponent(parts[1]);
+      // Reject path traversal.
+      if (!/^[A-Za-z0-9 _.\-()]+\.(aiff?|wav|mp3|m4a|caf)$/i.test(file)) {
+        res.statusCode = 400;
+        return res.end('bad filename');
+      }
+      const full = join(root, file);
+      if (full.startsWith(root) && existsSync(full)) {
+        const ct = file.toLowerCase().endsWith('.aiff') || file.toLowerCase().endsWith('.aif')
+          ? 'audio/aiff'
+          : file.toLowerCase().endsWith('.wav') ? 'audio/wav'
+          : file.toLowerCase().endsWith('.mp3') ? 'audio/mpeg'
+          : file.toLowerCase().endsWith('.m4a') ? 'audio/mp4'
+          : 'audio/x-caf';
+        res.setHeader('Content-Type', ct);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.end(readFileSync(full));
+      }
+    }
+    res.statusCode = 404;
+    return res.end('not found');
+  }
   const stat = serveStatic(url.pathname);
   if (stat) {
     res.setHeader('Content-Type', stat.contentType);

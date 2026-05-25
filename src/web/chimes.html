@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MinionHQ — chime picker</title>
+  <style>
+    :root {
+      --bg: #0f1116;
+      --bg-2: #161922;
+      --bg-3: #1d212c;
+      --fg: #e7e9ee;
+      --fg-dim: #9aa0aa;
+      --border: #2a2f3a;
+      --accent: #4f8cff;
+      --green: #50c878;
+      --yellow: #f5c150;
+      --red: #f47174;
+      --purple: #b48cff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 24px;
+    }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p.lead { margin: 0 0 24px; color: var(--fg-dim); max-width: 780px; }
+    p.lead code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 24px;
+      max-width: 1500px;
+    }
+    section {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+    }
+    section h2 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      letter-spacing: .02em;
+    }
+    section .sub {
+      color: var(--fg-dim);
+      margin: 0 0 14px;
+      font-size: 12px;
+    }
+    .category {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--fg-dim);
+      margin: 18px 0 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+    .category:first-child { margin-top: 0; }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-3);
+      margin-bottom: 6px;
+    }
+    .row .meta { flex: 1; min-width: 0; }
+    .row .name { font-weight: 600; font-size: 13px; }
+    .row .desc { color: var(--fg-dim); font-size: 11.5px; margin-top: 2px; }
+    button.play, button.action {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 6px 12px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    button.play:hover, button.action:hover { background: var(--accent); border-color: var(--accent); }
+    button.play[data-playing="1"] { background: var(--accent); border-color: var(--accent); }
+    select {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 5px 8px;
+      font: inherit;
+      font-size: 13px;
+      min-width: 240px;
+      max-width: 260px;
+    }
+    .ev-tag {
+      display: inline-block;
+      font-size: 10px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--fg-dim);
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .ev-tag[data-tier="active"]    { color: var(--green);  border-color: var(--green); }
+    .ev-tag[data-tier="sub"]       { color: var(--yellow); border-color: var(--yellow); }
+    .ev-tag[data-tier="lifecycle"] { color: var(--purple); border-color: var(--purple); }
+    .ev-tag[data-tier="aspirational"] { color: var(--fg-dim); }
+    .footer {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    pre.out {
+      grid-column: 1 / -1;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      margin: 0;
+    }
+    .src-badge {
+      display: inline-block;
+      font-size: 9.5px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .src-badge[data-src="macos"]   { color: var(--accent); border: 1px solid var(--accent); }
+    .src-badge[data-src="synth"]   { color: var(--purple); border: 1px solid var(--purple); }
+    .src-badge[data-src="musical"] { color: var(--green);  border: 1px solid var(--green); }
+    .src-badge[data-src="game"]    { color: var(--yellow); border: 1px solid var(--yellow); }
+  </style>
+</head>
+<body>
+  <h1>🔔 Chime picker</h1>
+  <p class="lead">
+    Audition every chime on the left, then assign one to each event on the right.
+    Three libraries are mixed together: <span class="src-badge" data-src="macos">macOS</span> real system sounds,
+    <span class="src-badge" data-src="musical">musical</span> longer melodic synth phrases,
+    and <span class="src-badge" data-src="synth">synth</span> short Web-Audio variants.
+    When you're happy, click <b>Copy mapping</b> and paste it back to Claude.
+  </p>
+
+  <div class="grid">
+    <section>
+      <h2>Chimes</h2>
+      <p class="sub">Click ▶ to preview. Categories separate the libraries.</p>
+      <div id="chime-list">loading…</div>
+    </section>
+
+    <section>
+      <h2>Events</h2>
+      <p class="sub">
+        <span class="ev-tag" data-tier="active">active</span> fires today &nbsp;
+        <span class="ev-tag" data-tier="sub">sub-event</span> can be split out &nbsp;
+        <span class="ev-tag" data-tier="lifecycle">lifecycle</span> spawn/resume/stop &nbsp;
+        <span class="ev-tag" data-tier="aspirational">future</span>
+      </p>
+      <div id="event-list"></div>
+    </section>
+
+    <div class="footer">
+      <button class="action" id="play-all">▶ Play all chimes in order</button>
+      <button class="action" id="copy">📋 Copy mapping</button>
+      <button class="action" id="reset">↺ Reset selections</button>
+      <span id="copy-status" style="color: var(--green); font-size: 12px;"></span>
+    </div>
+
+    <pre class="out" id="mapping-out">// your mapping will appear here as you pick</pre>
+  </div>
+
+  <script type="module">
+    // ─── Audio engine ──────────────────────────────────────────────────────
+    let ctx = null;
+    function ac() {
+      if (!ctx) {
+        const C = window.AudioContext || window.webkitAudioContext;
+        ctx = new C();
+      }
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      return ctx;
+    }
+    function tone(freq, startAt, durSec, gain = 0.16, type = 'sine') {
+      const a = ac();
+      const osc = a.createOscillator();
+      const g = a.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      osc.connect(g);
+      g.connect(a.destination);
+      const t0 = a.currentTime + startAt;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      osc.start(t0);
+      osc.stop(t0 + durSec + 0.05);
+    }
+    function noise(startAt, durSec, gain = 0.08, freq = 1200, q = 6) {
+      const a = ac();
+      const buf = a.createBuffer(1, Math.max(1, Math.floor(a.sampleRate * durSec)), a.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+      const src = a.createBufferSource();
+      src.buffer = buf;
+      const bp = a.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = freq;
+      bp.Q.value = q;
+      const g = a.createGain();
+      g.gain.setValueAtTime(gain, a.currentTime + startAt);
+      g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + startAt + durSec);
+      src.connect(bp); bp.connect(g); g.connect(a.destination);
+      src.start(a.currentTime + startAt);
+      src.stop(a.currentTime + startAt + durSec + 0.05);
+    }
+    function bell(freq, startAt, durSec, gain = 0.16) {
+      const a = ac();
+      const car = a.createOscillator();
+      const mod = a.createOscillator();
+      const modGain = a.createGain();
+      const g = a.createGain();
+      car.type = 'sine'; mod.type = 'sine';
+      car.frequency.value = freq;
+      mod.frequency.value = freq * 2.76;
+      modGain.gain.value = freq * 1.5;
+      mod.connect(modGain); modGain.connect(car.frequency);
+      car.connect(g); g.connect(a.destination);
+      const t0 = a.currentTime + startAt;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gain, t0 + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      mod.start(t0); car.start(t0);
+      mod.stop(t0 + durSec + 0.05); car.stop(t0 + durSec + 0.05);
+    }
+    // Pluck: short sine with very fast attack, exp decay — guitar-string-ish
+    function pluck(freq, startAt, durSec, gain = 0.18) {
+      const a = ac();
+      const osc = a.createOscillator();
+      const g = a.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const t0 = a.currentTime + startAt;
+      osc.connect(g); g.connect(a.destination);
+      g.gain.setValueAtTime(gain, t0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      osc.start(t0); osc.stop(t0 + durSec + 0.05);
+    }
+    // Marimba: bell + lowpass + short envelope. Warm, woody.
+    function marimba(freq, startAt, durSec, gain = 0.2) {
+      const a = ac();
+      const car = a.createOscillator();
+      const mod = a.createOscillator();
+      const modGain = a.createGain();
+      const g = a.createGain();
+      const lp = a.createBiquadFilter();
+      car.type = 'sine'; mod.type = 'sine';
+      car.frequency.value = freq;
+      mod.frequency.value = freq * 4;
+      modGain.gain.value = freq * 2;
+      mod.connect(modGain); modGain.connect(car.frequency);
+      lp.type = 'lowpass'; lp.frequency.value = 2800;
+      car.connect(lp); lp.connect(g); g.connect(a.destination);
+      const t0 = a.currentTime + startAt;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gain, t0 + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+      mod.start(t0); car.start(t0);
+      mod.stop(t0 + durSec + 0.05); car.stop(t0 + durSec + 0.05);
+    }
+
+    // Pitches (Hz) — equal temperament, A4=440
+    const P = {
+      C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.00, A4: 440.00, B4: 493.88,
+      C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, B5: 987.77,
+      C6: 1046.50, D6: 1174.66, E6: 1318.51, G6: 1567.98,
+      Fs4: 369.99, Fs5: 739.99, Bb4: 466.16, Eb5: 622.25,
+    };
+
+    // ─── macOS system-sound loader ─────────────────────────────────────────
+    async function loadMacOSChimes() {
+      try {
+        const r = await fetch('/api/system-sounds');
+        const j = await r.json();
+        if (!j.ok || !Array.isArray(j.sounds)) return [];
+        return j.sounds.map((s) => ({
+          id: `macos-${s.id}`,
+          category: 'macOS system sounds',
+          source: 'macos',
+          name: s.name,
+          desc: s.source === 'user' ? 'From ~/Library/Sounds' : 'Built-in macOS sound',
+          url: s.url,
+          play() {
+            const audio = new Audio(s.url);
+            audio.volume = 0.9;
+            audio.play().catch((e) => console.warn('audio play failed', e));
+          },
+        }));
+      } catch (e) {
+        console.warn('macOS sounds failed to load', e);
+        return [];
+      }
+    }
+
+    // ─── Musical (longer, melodic) chimes ──────────────────────────────────
+    const MUSICAL_CHIMES = [
+      {
+        id: 'mus-major-cadence',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Major cadence (C E G C)',
+        desc: '1–3–5–8 ascending triangle. Triumphant — current `agent-finished` chime.',
+        play() {
+          tone(P.C5, 0.00, 0.16, 0.14, 'triangle');
+          tone(P.E5, 0.10, 0.16, 0.14, 'triangle');
+          tone(P.G5, 0.20, 0.16, 0.14, 'triangle');
+          tone(P.C6, 0.30, 0.34, 0.16, 'triangle');
+        },
+      },
+      {
+        id: 'mus-unresolved-triad',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Unresolved triad (C E G…)',
+        desc: '1–3–5 hangs on the 5th. Questioning — current `needs-input` chime.',
+        play() {
+          tone(P.C5, 0.00, 0.16, 0.14, 'triangle');
+          tone(P.E5, 0.10, 0.16, 0.14, 'triangle');
+          tone(P.G5, 0.20, 0.34, 0.16, 'triangle');
+        },
+      },
+      {
+        id: 'mus-minor-fall',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Minor fall (A → F)',
+        desc: 'A4 → F4 square-wave fall. Soft alert — current `error` chime.',
+        play() {
+          tone(P.A4, 0.00, 0.22, 0.16, 'square');
+          tone(P.F4, 0.20, 0.36, 0.16, 'square');
+        },
+      },
+      {
+        id: 'mus-marimba-arp',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Marimba arpeggio',
+        desc: 'C–E–G–C on a warm wooden marimba. Lovely for "done".',
+        play() {
+          marimba(P.C5, 0.00, 0.45, 0.20);
+          marimba(P.E5, 0.10, 0.45, 0.20);
+          marimba(P.G5, 0.20, 0.45, 0.20);
+          marimba(P.C6, 0.30, 0.70, 0.22);
+        },
+      },
+      {
+        id: 'mus-marimba-question',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Marimba question',
+        desc: 'Two notes rising a 5th on marimba. Curious.',
+        play() {
+          marimba(P.C5, 0.00, 0.45, 0.20);
+          marimba(P.G5, 0.16, 0.55, 0.20);
+        },
+      },
+      {
+        id: 'mus-bell-trio',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Bell trio',
+        desc: 'Three FM-bell strikes (G–E–C). Soft, churchy resolution.',
+        play() {
+          bell(P.G5, 0.00, 0.9, 0.16);
+          bell(P.E5, 0.18, 0.9, 0.16);
+          bell(P.C5, 0.36, 1.0, 0.16);
+        },
+      },
+      {
+        id: 'mus-bell-question',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Bell question',
+        desc: 'Two FM-bell strikes (C → G) climbing. Patient inquiry.',
+        play() {
+          bell(P.C5, 0.00, 0.9, 0.18);
+          bell(P.G5, 0.22, 1.0, 0.18);
+        },
+      },
+      {
+        id: 'mus-pluck-up',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Plucked arpeggio',
+        desc: 'Quick guitar-pluck arpeggio C–G–E–C. Energetic.',
+        play() {
+          pluck(P.C5, 0.00, 0.22, 0.18);
+          pluck(P.G5, 0.07, 0.22, 0.18);
+          pluck(P.E5, 0.14, 0.22, 0.18);
+          pluck(P.C6, 0.21, 0.32, 0.20);
+        },
+      },
+      {
+        id: 'mus-pluck-zelda',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Item-get (Zelda-esque)',
+        desc: 'C5–E5–G5–C6–G5–C6, fast arpeggio with bell finish. You got the thing.',
+        play() {
+          pluck(P.C5, 0.00, 0.10, 0.18);
+          pluck(P.E5, 0.06, 0.10, 0.18);
+          pluck(P.G5, 0.12, 0.10, 0.18);
+          pluck(P.C6, 0.18, 0.10, 0.18);
+          pluck(P.G5, 0.26, 0.10, 0.18);
+          bell(P.C6,  0.34, 0.6, 0.20);
+        },
+      },
+      {
+        id: 'mus-mario-coin',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Coin (B5 → E6)',
+        desc: 'Two quick square-wave notes leaping a fourth. Game-y.',
+        play() {
+          tone(P.B5, 0.00, 0.08, 0.18, 'square');
+          tone(P.E6, 0.07, 0.30, 0.18, 'square');
+        },
+      },
+      {
+        id: 'mus-error-minor',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Minor-third drop',
+        desc: 'E♭5 → C5 with soft sawtooth. Polite "uh-oh".',
+        play() {
+          tone(P.Eb5, 0.00, 0.18, 0.14, 'sawtooth');
+          tone(P.C5,  0.16, 0.34, 0.14, 'sawtooth');
+        },
+      },
+      {
+        id: 'mus-tritone-warn',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Tritone warning (C + F♯)',
+        desc: 'Dissonant simultaneous interval. Tense — good for errors.',
+        play() {
+          tone(P.C5,  0.00, 0.40, 0.14, 'square');
+          tone(P.Fs5, 0.00, 0.40, 0.14, 'square');
+        },
+      },
+      {
+        id: 'mus-chord-stab',
+        category: 'Musical phrases',
+        source: 'musical',
+        name: 'Major chord stab',
+        desc: 'C–E–G simultaneous triangle chord, ~250ms. Clean punctuation.',
+        play() {
+          tone(P.C5, 0.0, 0.28, 0.12, 'triangle');
+          tone(P.E5, 0.0, 0.28, 0.12, 'triangle');
+          tone(P.G5, 0.0, 0.28, 0.12, 'triangle');
+        },
+      },
+    ];
+
+    // ─── Short synth chimes ────────────────────────────────────────────────
+    const SYNTH_CHIMES = [
+      {
+        id: 'syn-two-tone-ding',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Two-tone ding',
+        desc: 'B5 → E5 friendly phone-notification ding.',
+        play() {
+          tone(P.B5, 0.00, 0.22, 0.18, 'sine');
+          tone(P.E5, 0.16, 0.32, 0.16, 'sine');
+        },
+      },
+      {
+        id: 'syn-single-bell',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Single bell',
+        desc: 'One FM-bell strike on E5, long decay.',
+        play() { bell(P.E5, 0, 1.0, 0.20); },
+      },
+      {
+        id: 'syn-glass-ping',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Glass ping',
+        desc: 'Bright FM-bell at A5. Crystalline.',
+        play() { bell(P.A5, 0, 0.7, 0.18); },
+      },
+      {
+        id: 'syn-knock-knock',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Knock-knock',
+        desc: 'Two low filtered noise taps. "Hey".',
+        play() {
+          noise(0.00, 0.08, 0.20, 280, 4);
+          noise(0.14, 0.08, 0.18, 280, 4);
+        },
+      },
+      {
+        id: 'syn-wood-block',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Wood block',
+        desc: 'Single percussive tick. Minimal.',
+        play() { noise(0.0, 0.04, 0.22, 1600, 12); },
+      },
+      {
+        id: 'syn-whistle-up',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Whistle up',
+        desc: 'Sine sweep 600→1000 Hz. Quirky.',
+        play() {
+          const a = ac();
+          const osc = a.createOscillator();
+          const g = a.createGain();
+          osc.type = 'sine';
+          const t0 = a.currentTime;
+          osc.frequency.setValueAtTime(600, t0);
+          osc.frequency.exponentialRampToValueAtTime(1000, t0 + 0.25);
+          osc.connect(g); g.connect(a.destination);
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.3);
+          osc.start(t0); osc.stop(t0 + 0.35);
+        },
+      },
+      {
+        id: 'syn-whistle-down',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Whistle down',
+        desc: 'Sine sweep 1000→500 Hz. Wistful.',
+        play() {
+          const a = ac();
+          const osc = a.createOscillator();
+          const g = a.createGain();
+          osc.type = 'sine';
+          const t0 = a.currentTime;
+          osc.frequency.setValueAtTime(1000, t0);
+          osc.frequency.exponentialRampToValueAtTime(500, t0 + 0.28);
+          osc.connect(g); g.connect(a.destination);
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+          osc.start(t0); osc.stop(t0 + 0.36);
+        },
+      },
+      {
+        id: 'syn-sonar',
+        category: 'Short synth',
+        source: 'synth',
+        name: 'Submarine sonar',
+        desc: '200 Hz blip with long sine decay.',
+        play() { tone(200, 0, 0.7, 0.18, 'sine'); },
+      },
+      {
+        id: 'syn-silent',
+        category: 'Short synth',
+        source: 'synth',
+        name: '(silent)',
+        desc: 'No sound. Use for events you DON\'T want a chime on.',
+        play() { /* intentionally nothing */ },
+      },
+    ];
+
+    // ─── Event catalogue ───────────────────────────────────────────────────
+    const EVENTS = [
+      { id: 'needs-input',     tier: 'active',       name: 'needs-input',     desc: 'Session is waiting on you (any input/permission/elicitation).' },
+      { id: 'agent-finished',  tier: 'active',       name: 'agent-finished',  desc: 'Agent finished a turn and is idle.' },
+      { id: 'error',           tier: 'active',       name: 'error',           desc: 'Session entered error state.' },
+      { id: 'ask-user',        tier: 'sub',         name: 'ask_user',        desc: 'Agent specifically asked a question (subset of needs-input).' },
+      { id: 'permission',      tier: 'sub',         name: 'permission_request', desc: 'Agent wants to run a tool that needs approval.' },
+      { id: 'elicitation',     tier: 'sub',         name: 'elicitation',     desc: 'Structured form / OAuth handoff requested.' },
+      { id: 'session-spawned', tier: 'lifecycle',   name: 'session-spawned', desc: 'A new session was just created.' },
+      { id: 'session-resumed', tier: 'lifecycle',   name: 'session-resumed', desc: 'A dormant session was woken up.' },
+      { id: 'session-stopped', tier: 'lifecycle',   name: 'session-stopped', desc: 'A session was torn down.' },
+      { id: 'tool-failed',     tier: 'aspirational',name: 'tool-failed',     desc: 'A single tool call returned an error (session not killed).' },
+    ];
+
+    // ─── Render ────────────────────────────────────────────────────────────
+    const chimeListEl = document.getElementById('chime-list');
+    const eventListEl = document.getElementById('event-list');
+    const mappingOutEl = document.getElementById('mapping-out');
+    const copyStatus  = document.getElementById('copy-status');
+
+    function playChime(c, btn) {
+      try { c.play(); } catch (e) { console.warn(e); }
+      if (btn) {
+        btn.dataset.playing = '1';
+        setTimeout(() => { btn.dataset.playing = '0'; }, 700);
+      }
+    }
+
+    async function init() {
+      const macos = await loadMacOSChimes();
+      const ALL = [...macos, ...MUSICAL_CHIMES, ...SYNTH_CHIMES];
+
+      // Render chimes grouped by category
+      chimeListEl.innerHTML = '';
+      const byCat = new Map();
+      for (const c of ALL) {
+        if (!byCat.has(c.category)) byCat.set(c.category, []);
+        byCat.get(c.category).push(c);
+      }
+      for (const [cat, items] of byCat) {
+        const header = document.createElement('div');
+        header.className = 'category';
+        header.textContent = `${cat} (${items.length})`;
+        chimeListEl.appendChild(header);
+        items.forEach((c) => {
+          const row = document.createElement('div');
+          row.className = 'row';
+          row.innerHTML = `
+            <div class="meta">
+              <div class="name"><span class="src-badge" data-src="${c.source}">${c.source}</span><span class="nm"></span></div>
+              <div class="desc"></div>
+            </div>
+            <button class="play" type="button">▶ play</button>
+          `;
+          row.querySelector('.nm').textContent = c.name;
+          row.querySelector('.desc').textContent = c.desc;
+          const btn = row.querySelector('.play');
+          btn.addEventListener('click', () => playChime(c, btn));
+          chimeListEl.appendChild(row);
+        });
+      }
+
+      // Render events
+      const selections = {}; // eventId → chimeId
+      EVENTS.forEach((e) => {
+        const row = document.createElement('div');
+        row.className = 'row';
+        const tierLabel = e.tier === 'active' ? 'active'
+          : e.tier === 'sub' ? 'sub'
+          : e.tier === 'lifecycle' ? 'lifecycle'
+          : 'future';
+        // Build optgroups so the dropdown is navigable
+        const optGroups = Array.from(byCat.entries()).map(([cat, items]) => {
+          const opts = items.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+          return `<optgroup label="${cat}">${opts}</optgroup>`;
+        }).join('');
+        row.innerHTML = `
+          <div class="meta">
+            <div class="name"><span class="ev-tag" data-tier="${e.tier}">${tierLabel}</span><span class="nm"></span></div>
+            <div class="desc"></div>
+          </div>
+          <select data-event="${e.id}">
+            <option value="">— pick a chime —</option>
+            ${optGroups}
+          </select>
+          <button class="play" type="button" data-preview>▶</button>
+        `;
+        row.querySelector('.nm').textContent = e.name;
+        row.querySelector('.desc').textContent = e.desc;
+        const sel = row.querySelector('select');
+        const previewBtn = row.querySelector('[data-preview]');
+        sel.addEventListener('change', () => {
+          if (sel.value) selections[e.id] = sel.value;
+          else delete selections[e.id];
+          renderMapping();
+        });
+        previewBtn.addEventListener('click', () => {
+          const id = sel.value;
+          if (!id) return;
+          const chime = ALL.find((c) => c.id === id);
+          if (chime) playChime(chime, previewBtn);
+        });
+        eventListEl.appendChild(row);
+      });
+
+      function renderMapping() {
+        const lines = ['// MinionHQ chime mapping'];
+        let any = false;
+        for (const e of EVENTS) {
+          const cid = selections[e.id];
+          if (cid) {
+            const c = ALL.find((x) => x.id === cid);
+            lines.push(`${e.id.padEnd(18)} → ${cid.padEnd(28)}  // ${c ? c.name + ' (' + c.source + ')' : ''}`);
+            any = true;
+          }
+        }
+        if (!any) lines.push('// (nothing assigned yet — pick chimes on the right)');
+        mappingOutEl.textContent = lines.join('\n');
+      }
+      renderMapping();
+
+      document.getElementById('play-all').addEventListener('click', async () => {
+        for (const c of ALL) {
+          try { c.play(); } catch {}
+          await new Promise((r) => setTimeout(r, 900));
+        }
+      });
+
+      document.getElementById('copy').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(mappingOutEl.textContent);
+          copyStatus.textContent = '✓ copied to clipboard';
+          setTimeout(() => { copyStatus.textContent = ''; }, 2500);
+        } catch {
+          copyStatus.textContent = '⚠ could not copy — select the text manually';
+        }
+      });
+
+      document.getElementById('reset').addEventListener('click', () => {
+        for (const k of Object.keys(selections)) delete selections[k];
+        document.querySelectorAll('select[data-event]').forEach((s) => { s.value = ''; });
+        renderMapping();
+      });
+    }
+
+    init().catch((e) => {
+      chimeListEl.innerHTML = '<div style="color: var(--red);">Failed to initialise: ' + (e?.message || e) + '</div>';
+    });
+  </script>
+</body>
+</html>
