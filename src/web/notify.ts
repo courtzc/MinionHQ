@@ -65,8 +65,8 @@ function browserNotify(kind: NotifyKind, sessionTitle?: string | null, body?: st
       body: body ?? '',
       tag: `minionhq-${kind}`,
       silent: true,
-      icon: '/minion.jpg',
-      badge: '/minion.jpg',
+      icon: '/minion.png',
+      badge: '/minion.png',
     });
     n.onclick = () => { window.focus(); n.close(); };
   } catch (e) {

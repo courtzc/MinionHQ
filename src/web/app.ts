@@ -229,7 +229,7 @@ function renderEmpty() {
   const empty = document.createElement('div');
   empty.className = 'empty';
   empty.innerHTML = `
-    <img class="empty-minion" src="/minion.jpg" alt="" />
+    <img class="empty-minion" src="/minion.png" alt="" />
     <div class="empty-title">No minions yet</div>
     <div class="empty-sub">Spawn a Copilot session on a branch of your choosing, or pick up where you left off.</div>
     <div class="empty-actions">

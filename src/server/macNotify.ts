@@ -39,14 +39,14 @@ const IS_DARWIN = process.platform === 'darwin';
 /**
  * Absolute path to the minion icon used as the notification's app icon.
  * Computed once at module load — terminal-notifier needs a real on-disk
- * path (not a URL). Tries `public/minion.jpg` first (post-build) and falls
- * back to `src/web/minion.jpg` (dev mode with no build artifacts).
+ * path (not a URL). Tries `public/minion.png` first (post-build) and falls
+ * back to `src/web/minion.png` (dev mode with no build artifacts).
  */
 const ICON_PATH: string | null = (() => {
   try {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const projectRoot = resolve(__dirname, '..', '..');
-    for (const rel of ['public/minion.jpg', 'src/web/minion.jpg']) {
+    for (const rel of ['public/minion.png', 'src/web/minion.png']) {
       const candidate = join(projectRoot, rel);
       if (existsSync(candidate)) return candidate;
     }
