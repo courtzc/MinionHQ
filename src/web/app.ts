@@ -970,7 +970,8 @@ wireSettings();
 
 // ─────────────────────────── context drawer ────────────────────────────────
 const ctxDrawer = document.getElementById('context-drawer') as HTMLElement | null;
-const ctxOpenBtn = document.getElementById('open-context') as HTMLButtonElement | null;
+const ctxContextBtn = document.getElementById('open-context-btn') as HTMLButtonElement | null;
+const ctxLogsBtn = document.getElementById('open-logs-btn') as HTMLButtonElement | null;
 const ctxCloseBtn = document.getElementById('close-context') as HTMLButtonElement | null;
 const ctxMeta = document.getElementById('ctx-meta') as HTMLElement | null;
 const ctxList = document.getElementById('ctx-list') as HTMLElement | null;
@@ -1039,8 +1040,9 @@ function refitAfterDrawerToggle(): void {
   setTimeout(refitActiveTerminal, 400);
 }
 
-async function openCtxDrawer(): Promise<void> {
+async function openCtxDrawer(mode?: DrawerMode): Promise<void> {
   if (!ctxDrawer) return;
+  if (mode) drawerMode = mode;
   ctxDrawer.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawer-open');
   refitAfterDrawerToggle();
@@ -1166,9 +1168,15 @@ function newCtxFile(): void {
 // Click the "context" topbar button to TOGGLE the drawer (open if closed,
 // close if currently open). This way the same button users used to open it
 // also dismisses it without having to aim for the ✕.
-ctxOpenBtn?.addEventListener('click', () => {
-  if (ctxDrawer?.getAttribute('aria-hidden') === 'false') closeCtxDrawer();
-  else void openCtxDrawer();
+ctxContextBtn?.addEventListener('click', () => {
+  const open = ctxDrawer?.getAttribute('aria-hidden') === 'false';
+  if (open && drawerMode === 'context') closeCtxDrawer();
+  else void openCtxDrawer('context');
+});
+ctxLogsBtn?.addEventListener('click', () => {
+  const open = ctxDrawer?.getAttribute('aria-hidden') === 'false';
+  if (open && drawerMode === 'logs') closeCtxDrawer();
+  else void openCtxDrawer('logs');
 });
 ctxCloseBtn?.addEventListener('click', closeCtxDrawer);
 ctxSaveBtn?.addEventListener('click', () => { void saveCtxFile(); });
@@ -1203,13 +1211,16 @@ function applyDrawerMode(mode: DrawerMode): void {
   if (ctxDrawer) ctxDrawer.setAttribute('data-mode', mode);
   for (const tab of drawerTabs) tab.setAttribute('aria-selected', String(tab.dataset.mode === mode));
   for (const pane of tabPanes) pane.hidden = pane.dataset.mode !== mode;
+  if (ctxContextBtn) ctxContextBtn.dataset.active = String(mode === 'context');
+  if (ctxLogsBtn) ctxLogsBtn.dataset.active = String(mode === 'logs');
   if (ctxMeta && mode === 'logs') {
     ctxMeta.textContent = activeId ? `session ${activeId.slice(0, 8)} · logs` : '(open a session to view its logs)';
   }
   stopLogsFollow();
   if (mode === 'logs') {
     void refreshLogs();
-    if (logsFollowEl?.checked) startLogsFollow();
+    if (logsFollowEl && !logsFollowEl.checked) logsFollowEl.checked = true;
+    startLogsFollow();
   }
 }
 
@@ -1227,14 +1238,14 @@ async function refreshLogs(): Promise<void> {
     setLogsStatus('no active session', 'err');
     return;
   }
-  const stream = logsStreamSel?.value ?? 'transcript';
+  const stream = logsStreamSel?.value ?? 'telemetry';
   const bytes = logsBytesSel?.value ?? '65536';
   try {
     const r = await fetch(`/api/logs/tail?id=${encodeURIComponent(activeId)}&stream=${encodeURIComponent(stream)}&bytes=${encodeURIComponent(bytes)}`);
     const data = await r.json() as { ok: boolean; size?: number; truncated?: boolean; content?: string; path?: string; error?: string };
     if (!data.ok) { setLogsStatus(data.error ?? 'tail failed', 'err'); return; }
     const wasPinned = isPinnedToBottom(logsViewEl);
-    logsViewEl.textContent = data.content ?? '';
+    logsViewEl.textContent = formatLogs(stream, data.content ?? '');
     if (wasPinned) logsViewEl.scrollTop = logsViewEl.scrollHeight;
     const kb = ((data.size ?? 0) / 1024).toFixed(1);
     setLogsStatus(`${kb} KB${data.truncated ? ' (tail)' : ''}`, 'ok');
@@ -1244,13 +1255,39 @@ async function refreshLogs(): Promise<void> {
   }
 }
 
+function formatLogs(stream: string, raw: string): string {
+  if (!raw) return '';
+  if (stream === 'transcript') return raw;
+  const out: string[] = [];
+  for (const line of raw.split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === 'object' && 'ts' in obj && typeof (obj as { ts: unknown }).ts === 'number') {
+        const ts = (obj as { ts: number }).ts;
+        const iso = new Date(ts).toISOString().replace('T', ' ').slice(0, 23);
+        const rest: Record<string, unknown> = { ...(obj as Record<string, unknown>) };
+        delete rest.ts;
+        out.push(`[${iso}]\n${JSON.stringify(rest, null, 2)}`);
+      } else {
+        out.push(JSON.stringify(obj, null, 2));
+      }
+    } catch {
+      out.push(s);
+    }
+    out.push('');
+  }
+  return out.join('\n');
+}
+
 function isPinnedToBottom(el: HTMLElement): boolean {
   return el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
 }
 
 function startLogsFollow(): void {
   stopLogsFollow();
-  logsFollowTimer = setInterval(() => { void refreshLogs(); }, 1500);
+  logsFollowTimer = setInterval(() => { void refreshLogs(); }, 750);
 }
 function stopLogsFollow(): void {
   if (logsFollowTimer) { clearInterval(logsFollowTimer); logsFollowTimer = null; }

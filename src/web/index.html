@@ -19,7 +19,8 @@
       <button class="tab-new" id="inline-new" title="New session (⌃⌥T)" aria-label="New session">+</button>
     </nav>
     <div class="actions">
-      <button id="open-context" title="Repo context / logs (⌘.)">📚 panel</button>
+      <button id="open-context-btn" data-mode="context" title="Repo context (⌘.)">📚 context</button>
+      <button id="open-logs-btn" data-mode="logs" title="Session logs (⌘.)">📜 logs</button>
       <button id="resume-session" title="Resume a previous session">↻ resume</button>
       <button id="new-session" title="New session (⌃⌥T)">+ new</button>
     </div>
@@ -52,9 +53,9 @@
         <div class="logs-controls">
           <label class="logs-label">stream
             <select id="logs-stream">
-              <option value="transcript">transcript</option>
+              <option value="telemetry" selected>telemetry</option>
               <option value="events">events</option>
-              <option value="telemetry">telemetry</option>
+              <option value="transcript">transcript</option>
             </select>
           </label>
           <label class="logs-label">tail

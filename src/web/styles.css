@@ -751,7 +751,8 @@ body.popout .pane { padding: 4px; }
   font-family: ui-monospace, "SF Mono", Consolas, monospace;
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
   overflow: auto;
   min-height: 0;
 }
@@ -761,7 +762,8 @@ body.popout .pane { padding: 4px; }
   font-style: italic;
 }
 
-.actions button#open-context {
+.actions button#open-context-btn,
+.actions button#open-logs-btn {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--fg);
@@ -771,7 +773,18 @@ body.popout .pane { padding: 4px; }
   font-size: 12px;
   margin-right: 4px;
 }
-.actions button#open-context:hover { background: var(--bg-3); }
+.actions button#open-context-btn:hover,
+.actions button#open-logs-btn:hover { background: var(--bg-3); }
+.actions button#open-context-btn[data-active="true"],
+.actions button#open-logs-btn[data-active="true"] {
+  background: var(--bg-3);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+body.drawer-open .actions button#open-context-btn[data-active="false"],
+body.drawer-open .actions button#open-logs-btn[data-active="false"] {
+  opacity: 0.7;
+}
 
 /* ─── modal extras ─────────────────────────────────────────────────── */
 #cm-change-base { color: var(--accent); text-decoration: none; }
