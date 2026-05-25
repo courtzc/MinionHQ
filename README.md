@@ -61,6 +61,7 @@ A new tab opens in MinionHQ with the prompt pre-submitted.
 ~/.minionhq/
 ├── db.sqlite              durable session metadata
 ├── logs/<id>/             pty.log + events.jsonl per session
+├── attachments/<id>/      files dropped/pasted into a session
 ├── repos/<key>/
 │   ├── meta.json          { realPath, slug, ... }
 │   └── context/*.md       shared central context (you edit this)
@@ -88,7 +89,7 @@ WebSocket at `/` for live PTY streams. Binds to `127.0.0.1` only.
 
 ## Architecture
 
-The server (Node + `node-pty`) spawns Copilot CLI in a pseudo-terminal per session and pipes ANSI bytes over WebSocket to xterm.js in the browser. Status (`idle` / `thinking` / `needs-input` / `error`) is classified from the stream and broadcast for tab badges and OS notifications. SQLite stores enough metadata to resume any session after a restart.
+The server (Node + `node-pty`) spawns Copilot CLI in a pseudo-terminal per session and pipes ANSI bytes over WebSocket to xterm.js in the browser. Status (`spawning` / `idle` / `working` / `needs-input` / `error` / `exited`) is derived from the CLI's own `events.jsonl` sidecar — not regex-on-PTY-bytes — so badges and OS notifications stay accurate even when the agent renders fancy ANSI. SQLite stores enough metadata to resume any session after a restart.
 
 End-to-end keystroke latency on localhost is ~5ms — imperceptible vs running Copilot directly in a terminal.
 

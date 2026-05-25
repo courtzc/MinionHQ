@@ -104,7 +104,7 @@ just write it; the user can curate later.
   Example:
       ## 2025-01-15T10:30:00Z — ${opts.branch} — abcd1234
       Added auth middleware in src/auth. JWT verify happens in
-      requireAuth(). Token refresh isn't wired yet — see TODO at line 42.
+      requireAuth(). Token refresh still needs wiring up.
 - **Durable repo facts** (architecture decisions, build quirks, conventions)
   → create or update a topic-specific file in \`./.minionhq/repo-context/\`
   (e.g. \`architecture.md\`, \`build.md\`).

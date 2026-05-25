@@ -86,6 +86,12 @@ interface Internal {
   tailFd: number | null;
   tailOffset: number;
   tailTimer: NodeJS.Timeout | null;
+  /**
+   * Polling interval used while waiting for events.jsonl to appear. Tracked
+   * on the session so stopTail can cancel it — otherwise closing a session
+   * during the 10s open-wait would leak the interval until the watchdog fires.
+   */
+  tailWaitTimer: NodeJS.Timeout | null;
   /** Track tool.execution_start timestamps for duration telemetry. */
   toolStartTs: Map<string, { name: string; ts: number }>;
   /**
@@ -237,6 +243,7 @@ class SessionManager extends EventEmitter {
       tailFd: null,
       tailOffset: 0,
       tailTimer: null,
+      tailWaitTimer: null,
       toolStartTs: new Map(),
       suppressNextTurnEndIdle: false,
     };
@@ -509,6 +516,7 @@ class SessionManager extends EventEmitter {
         tailFd: null,
         tailOffset: 0,
         tailTimer: null,
+        tailWaitTimer: null,
         toolStartTs: new Map(),
         suppressNextTurnEndIdle: false,
       });
@@ -624,14 +632,22 @@ class SessionManager extends EventEmitter {
     };
     if (openOnce()) return;
     // events.jsonl may not exist on the first poll — keep trying briefly.
-    const waitTimer = setInterval(() => {
-      if (openOnce()) clearInterval(waitTimer);
+    // The handle is recorded on `s.tailWaitTimer` so stopTail() can cancel
+    // it; otherwise closing a session during the wait would leak the
+    // interval until the 10-second watchdog fires.
+    s.tailWaitTimer = setInterval(() => {
+      if (openOnce()) {
+        if (s.tailWaitTimer) { clearInterval(s.tailWaitTimer); s.tailWaitTimer = null; }
+      }
     }, 100);
-    setTimeout(() => clearInterval(waitTimer), 10_000);
+    setTimeout(() => {
+      if (s.tailWaitTimer) { clearInterval(s.tailWaitTimer); s.tailWaitTimer = null; }
+    }, 10_000);
   }
 
   private stopTail(s: Internal): void {
     if (s.tailTimer) { clearInterval(s.tailTimer); s.tailTimer = null; }
+    if (s.tailWaitTimer) { clearInterval(s.tailWaitTimer); s.tailWaitTimer = null; }
     if (s.tailFd !== null) {
       try { closeSync(s.tailFd); } catch { /* ignore */ }
       s.tailFd = null;

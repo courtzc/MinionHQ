@@ -10,6 +10,7 @@ import * as esbuild from 'esbuild';
 import { sessionManager } from './sessions.js';
 import { db, closeDb } from './db.js';
 import { ensureDirs, DEFAULTS, sessionLogDir, sessionAttachmentsDir } from './paths.js';
+import { SESSION_ID_RE, buildAttachmentPath } from './attachments.js';
 import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
@@ -106,6 +107,12 @@ const ptySizesPerSession = new Map<
 function recomputePtySize(sessionId: string): void {
   const m = ptySizesPerSession.get(sessionId);
   if (!m || m.size === 0) return;
+  // Skip dead/dormant sessions — there's no live PTY to resize and the
+  // map entry will be cleaned up by the session.exit handler. This guard
+  // avoids spending CPU on a Math.min reduction we'd just throw away,
+  // and avoids racing with concurrent close/exit handlers.
+  const meta = sessionManager.get(sessionId);
+  if (!meta || meta.dormant || meta.status === 'exited') return;
   let cols = Infinity;
   let rows = Infinity;
   for (const sz of m.values()) {
@@ -456,11 +463,13 @@ const httpServer = createServer(async (req, res) => {
     (async () => {
       try {
         const id = url.searchParams.get('id') ?? '';
-        if (!/^[a-f0-9-]{8,}$/i.test(id)) return jsonErr(res, 400, 'bad id');
+        if (!SESSION_ID_RE.test(id)) return jsonErr(res, 400, 'bad id');
+        // Refuse uploads for sessions we don't know about. This prevents an
+        // unauthenticated client from filling the disk with junk under
+        // arbitrary directory names, and keeps attachments scoped to real
+        // running/dormant sessions only.
+        if (!sessionManager.get(id)) return jsonErr(res, 404, 'unknown session');
         const rawName = url.searchParams.get('name') ?? 'attachment.bin';
-        // Strip directory traversal + most unsafe characters from the filename.
-        // Keep the extension so Copilot CLI / the model can detect mime type.
-        const safeName = rawName.replace(/[^A-Za-z0-9._-]/g, '_').slice(-80) || 'attachment.bin';
 
         // Stream the body with a (larger) size cap. We accept up to
         // MAX_ATTACHMENT_BYTES — well above the 64KB JSON limit but small
@@ -490,8 +499,9 @@ const httpServer = createServer(async (req, res) => {
         const blob = Buffer.concat(chunks, total);
         const dir = sessionAttachmentsDir(id);
         mkdirSync(dir, { recursive: true });
-        const ts = Date.now();
-        const absPath = join(dir, `${ts}-${safeName}`);
+        // Build the on-disk path through the shared helper so the name
+        // sanitisation + containment check live in one tested place.
+        const { path: absPath, name: safeName } = buildAttachmentPath(dir, rawName);
         writeFileSync(absPath, blob);
         return jsonOk(res, { path: absPath, name: safeName, size: total });
       } catch (e) {
