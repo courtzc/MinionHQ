@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, resolve, extname, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -166,23 +166,34 @@ async function bundleApp(): Promise<string> {
 // WAV in tmpdir keyed by source path + mtime. Cache survives within the
 // process lifetime; on restart we re-transcode (small files, fast).
 const WAV_CACHE_DIR = join(tmpdir(), 'minionhq-wav-cache');
+// Bump this when the transcoder logic changes so old cache entries are
+// transparently invalidated (e.g. v1 → v2 added FLLR-chunk stripping).
+const WAV_CACHE_VERSION = 'v2';
 const wavCache = new Map<string, string>(); // src abs path → cached wav path
 function transcodeToWav(srcAbsPath: string): string | null {
   try {
     const st = statSync(srcAbsPath);
-    const key = `${srcAbsPath}::${st.mtimeMs}::${st.size}`;
+    const key = `${srcAbsPath}::${st.mtimeMs}::${st.size}::${WAV_CACHE_VERSION}`;
     const cached = wavCache.get(key);
     if (cached && existsSync(cached)) return cached;
     if (!existsSync(WAV_CACHE_DIR)) mkdirSync(WAV_CACHE_DIR, { recursive: true });
     // Filename: sanitised base + content hash-ish suffix so collisions are unlikely.
     const safe = srcAbsPath.replace(/[^A-Za-z0-9._-]/g, '_').slice(-80);
-    const out = join(WAV_CACHE_DIR, `${safe}.${st.mtimeMs}.wav`);
+    const out = join(WAV_CACHE_DIR, `${safe}.${st.mtimeMs}.${WAV_CACHE_VERSION}.wav`);
     if (!existsSync(out)) {
       // afconvert: -f WAVE (container), -d LEI16 (16-bit little-endian PCM, the
       // safest WAV subformat for browser Web Audio decoders).
-      execFileSync('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16', srcAbsPath, out], {
+      const raw = `${out}.raw`;
+      execFileSync('/usr/bin/afconvert', ['-f', 'WAVE', '-d', 'LEI16', srcAbsPath, raw], {
         stdio: 'ignore',
       });
+      // afconvert pads between `fmt ` and `data` with a `FLLR` filler chunk.
+      // Chromium's decodeAudioData rejects WAVs that contain FLLR (even
+      // though it's a valid skippable RIFF chunk). Rewrite the file with
+      // FLLR (and any other non-essential chunks) stripped.
+      const stripped = stripFillerChunks(readFileSync(raw));
+      writeFileSync(out, stripped);
+      try { unlinkSync(raw); } catch { /* best-effort */ }
     }
     wavCache.set(key, out);
     return out;
@@ -190,6 +201,33 @@ function transcodeToWav(srcAbsPath: string): string | null {
     console.warn('[system-sound] transcode failed:', srcAbsPath, (e as Error).message);
     return null;
   }
+}
+
+// Strip RIFF padding/filler chunks (FLLR, JUNK, PAD ) from a WAV buffer.
+// Keeps the chunks browsers actually need (fmt , data, fact) plus any
+// chunk we don't explicitly drop. Chromium's decodeAudioData specifically
+// rejects FLLR; this is the minimum-surgery fix.
+function stripFillerChunks(buf: Buffer): Buffer {
+  if (buf.length < 12 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') {
+    return buf;
+  }
+  const drop = new Set(['FLLR', 'JUNK', 'PAD ']);
+  const kept: Buffer[] = [];
+  let i = 12;
+  while (i + 8 <= buf.length) {
+    const id = buf.toString('ascii', i, i + 4);
+    const sz = buf.readUInt32LE(i + 4);
+    const total = 8 + sz + (sz & 1); // chunks are word-aligned
+    if (i + total > buf.length) break;
+    if (!drop.has(id)) kept.push(buf.subarray(i, i + total));
+    i += total;
+  }
+  const body = Buffer.concat(kept);
+  const header = Buffer.alloc(12);
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(4 + body.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  return Buffer.concat([header, body]);
 }
 
 const httpServer = createServer(async (req, res) => {
