@@ -11,25 +11,29 @@ Run multiple GitHub Copilot CLI sessions side-by-side in your browser. Each sess
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Requirements
+## Quickstart
 
-- macOS or Linux
-- Node.js ≥ 20
-- git ≥ 2.30
-- The [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) installed and signed in (`copilot` on `$PATH`)
-
-## Install
+You need **macOS or Linux**, **Node.js ≥ 20**, and **git ≥ 2.30**. Then:
 
 ```bash
-git clone <this-repo> ~/repositories/MinionHQ
+# 1. Install the GitHub Copilot CLI and sign in
+npm install -g @github/copilot
+copilot      # follow the device-login prompt the first time, then /exit
+
+# 2. Clone MinionHQ
+git clone https://github.com/<you>/MinionHQ ~/repositories/MinionHQ
 cd ~/repositories/MinionHQ
-npm install
+
+# 3. Install + run
+npm install   # postinstall rebuilds node-pty against your Node binary
 npm start
 ```
 
-Open <http://127.0.0.1:4242>.
+Open <http://127.0.0.1:4242> in any modern browser. No special terminal emulator needed — the browser handles ANSI via xterm.js.
 
-> `npm install` runs a `postinstall` script that rebuilds `node-pty` against your Node binary. If you change Node versions, re-run it.
+> **First session**: click **+ new**, pick a repo from the dropdown (defaults to `~/repositories/*`), name the branch (e.g. `feat/foo`), optionally type a starter prompt, and hit *Create*. A new tab appears with Copilot CLI running in a fresh worktree on that branch.
+
+If anything goes wrong, jump to [Troubleshooting](#troubleshooting).
 
 ## Use
 
@@ -149,7 +153,7 @@ npm run build:web # esbuild → public/
 
 **`Error: cannot find module node-pty`** — the postinstall step that rebuilds `node-pty` against your Node binary didn't run, or you switched Node versions since. Re-run `npm install` (or just `node scripts/fix-node-pty.mjs`).
 
-**`copilot: command not found` when spawning a session** — install the [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) and ensure `copilot` is on `$PATH`, or set `MINIONHQ_COPILOT_BIN=/abs/path/to/copilot`.
+**`copilot: command not found` when spawning a session** — install the GitHub Copilot CLI with `npm install -g @github/copilot` and run `copilot` once to sign in. Or point MinionHQ at a custom location with `MINIONHQ_COPILOT_BIN=/abs/path/to/copilot`.
 
 **No repos in the dropdown** — the default discovery base is `~/repositories`. Either move your checkouts there, set `MINIONHQ_REPOS_BASE=/other/path`, or click *change* in the new-session modal.
 
