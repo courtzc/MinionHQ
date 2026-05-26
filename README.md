@@ -1,15 +1,18 @@
 # MinionHQ
 
-Run multiple GitHub Copilot CLI sessions side-by-side in your browser. Each session lives on its own git branch in its own worktree, with shared per-repo context and durable history.
+Wrapper around the GitHub Copilot CLI that runs multiple sessions in parallel, each on its own git worktree.
 
-```
-┌─ tabs ──────────────────────────────────────────────────────────────┐
-│ • feat/data-viz  • fix/chime-throttle  • docs/specs  • + new  • ↻ │
-├─────────────────────────────────────────────────────────────────────┤
-│  (xterm.js terminal — full Copilot CLI, ANSI passthrough)           │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+Run several Copilot sessions in your browser at once, tab between them, share context across them. Each session is its own branch in its own worktree, so they don't interfere with each other.
+
+Features:
+
+- Branch-per-session, worktree-per-session isolation
+- Auto-commit on exit: uncommitted work gets saved as `WIP <ts>` on its branch
+- Resume: sessions survive server restarts; closed Copilot processes can be resumed via `copilot --resume`
+- Per-repo shared context via `~/.minionhq/repos/<repo>/context/*.md` and an auto-generated `AGENTS.md`
+- OS notifications with distinct chimes for needs-input / done / error
+- HTTP endpoint to spawn sessions from outside (e.g. from your regular Copilot CLI in natural language)
+- Full xterm.js terminal — Copilot's thinking, slash commands, MCP servers, plugins, ANSI colours all work
 
 ## Quickstart
 
