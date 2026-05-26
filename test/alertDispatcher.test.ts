@@ -150,15 +150,43 @@ test('dispatcher: two events well outside the window fire twice', () => {
   ]);
 });
 
-test('dispatcher: rapid transitions inside the window reset the timer', () => {
+test('dispatcher: working → idle → working cancels the pending agent-finished', () => {
+  // Regression for the "agent finished" chime firing mid-tool-call: the
+  // server emits working→idle when a tool turn ends, then working again
+  // ~1ms later when the agent opens its next turn to process the tool
+  // result. Without cancelling, the queued agent-finished fires 500ms
+  // later — telling the user the agent is done while it's still working.
   const { d, clock, fired } = setup();
   d.onTransition('s1', 'working', 'idle');
-  clock.advance(400);
-  d.onTransition('s1', 'idle', 'working');   // null, but also doesn't reset
-  clock.advance(99);
-  assert.deepEqual(fired, []);
   clock.advance(1);
+  d.onTransition('s1', 'idle', 'working');
+  clock.advance(500);
+  assert.deepEqual(fired, []);
+});
+
+test('dispatcher: agent-finished still fires for a real final idle', () => {
+  // After the tool flap cancel above, a *real* final working→idle (no
+  // immediate re-working) must still produce the agent-finished chime.
+  const { d, clock, fired } = setup();
+  d.onTransition('s1', 'working', 'idle');
+  clock.advance(1);
+  d.onTransition('s1', 'idle', 'working');
+  clock.advance(1);
+  d.onTransition('s1', 'working', 'idle');
+  clock.advance(500);
   assert.deepEqual(fired, [{ id: 's1', kind: 'agent-finished' }]);
+});
+
+test('dispatcher: idle → working does NOT cancel a pending needs-input', () => {
+  // The cancel-on-working logic must only target agent-finished; a
+  // needs-input that arrived during a tool burst is high-priority and
+  // must survive an intervening working transition.
+  const { d, clock, fired } = setup();
+  d.onTransition('s1', 'idle', 'needs-input');
+  clock.advance(50);
+  d.onTransition('s1', 'needs-input', 'working');
+  clock.advance(500);
+  assert.deepEqual(fired, [{ id: 's1', kind: 'needs-input' }]);
 });
 
 test('dispatcher: a same-state transition is a no-op', () => {

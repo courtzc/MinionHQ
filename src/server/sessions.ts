@@ -809,8 +809,19 @@ class SessionManager extends EventEmitter {
           // processes the answer, and tell the next turn_end to stay quiet
           // (a fresh turn_start follows immediately for the real response).
           if (s.meta.status === 'needs-input') this.setStatus(id, 'working');
-          s.suppressNextTurnEndIdle = true;
         }
+        // Suppress the working→idle flap that immediately follows EVERY
+        // tool call. The agent's pattern after any tool — interactive,
+        // permission-gated, sql, file edit, anything — is:
+        //   tool.execution_complete → assistant.turn_end → assistant.turn_start
+        // all within ~1ms, because the model opens a new turn to process the
+        // tool result. Without this, the brief idle window leaks an
+        // 'agent-finished' chime that fires ~500ms later (after the
+        // dispatcher's settle window) even though the agent is actively
+        // working again. The flag is consumed by the next turn_end and reset
+        // by the next turn_start, so a final no-tool turn still surfaces
+        // idle correctly.
+        s.suppressNextTurnEndIdle = true;
         break;
       }
       case 'permission.requested':

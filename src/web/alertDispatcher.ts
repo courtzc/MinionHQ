@@ -106,8 +106,19 @@ export class AlertDispatcher {
    * Notify the dispatcher of a status transition for a session. The
    * dispatcher schedules a fire after the settle window, replacing any
    * pending alert for the same session with the higher-priority kind.
+   *
+   * Special case: any transition INTO `working` cancels a pending
+   * `agent-finished`. The agent obviously isn't finished — it just opened
+   * another turn (e.g. to process a tool result). The server-side
+   * `suppressNextTurnEndIdle` flag should prevent the working→idle flap
+   * from ever reaching us, but if it does (older clients, mis-classified
+   * tool, etc.) this is the belt-and-braces backup.
    */
   onTransition(id: string, prev: SessionStatus, next: SessionStatus, cause?: InputCause): void {
+    if (next === 'working') {
+      const pending = this.pending.get(id);
+      if (pending && pending.kind === 'agent-finished') this.cancel(id);
+    }
     const kind = alertKindFor(prev, next, cause);
     if (!kind) return;
     this.enqueue(id, kind);
