@@ -1,14 +1,7 @@
-export type NotifyKind =
-  | 'needs-input'
-  | 'agent-finished'
-  | 'error'
-  | 'ask-user'
-  | 'permission'
-  | 'elicitation'
-  | 'session-spawned'
-  | 'session-resumed'
-  | 'session-stopped'
-  | 'tool-failed';
+import { type AlertKind, browserToastTitle } from '../shared/alerts.js';
+
+/** Re-export so existing callsites keep compiling. */
+export type NotifyKind = AlertKind;
 
 let permissionAsked = false;
 let macSupported: boolean | null = null;
@@ -38,22 +31,6 @@ export function ensurePermission(): void {
   }
 }
 
-function browserTitle(kind: NotifyKind, sessionTitle?: string | null): string {
-  const tag = sessionTitle ? ` — ${sessionTitle}` : '';
-  switch (kind) {
-    case 'needs-input':     return `MinionHQ: needs input${tag}`;
-    case 'ask-user':        return `MinionHQ: agent has a question${tag}`;
-    case 'permission':      return `MinionHQ: permission required${tag}`;
-    case 'elicitation':     return `MinionHQ: input requested${tag}`;
-    case 'agent-finished':  return `MinionHQ: agent finished${tag}`;
-    case 'error':           return `MinionHQ: error${tag}`;
-    case 'tool-failed':     return `MinionHQ: tool failed${tag}`;
-    case 'session-spawned': return `MinionHQ: session started${tag}`;
-    case 'session-resumed': return `MinionHQ: session resumed${tag}`;
-    case 'session-stopped': return `MinionHQ: session stopped${tag}`;
-  }
-}
-
 function browserNotify(kind: NotifyKind, sessionTitle?: string | null, body?: string): void {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
@@ -61,7 +38,7 @@ function browserNotify(kind: NotifyKind, sessionTitle?: string | null, body?: st
   // window — OS-level toasts should always fire so they can hear/see them
   // from across the room or on another desktop.
   try {
-    const n = new Notification(browserTitle(kind, sessionTitle), {
+    const n = new Notification(browserToastTitle(kind, sessionTitle), {
       body: body ?? '',
       tag: `minionhq-${kind}`,
       silent: true,

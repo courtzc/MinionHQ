@@ -16,6 +16,10 @@ export const DEFAULTS = {
   host: process.env.MINIONHQ_HOST ?? '127.0.0.1',
   port: Number(process.env.MINIONHQ_PORT ?? 4242),
   copilotBin: process.env.MINIONHQ_COPILOT_BIN ?? 'copilot',
+  // Default base for repo discovery. Users can override at runtime via the
+  // "change base" link in the New-session modal; the env var sets the
+  // initial default so day-zero installs find their repos automatically.
+  reposBase: process.env.MINIONHQ_REPOS_BASE ?? join(homedir(), 'repositories'),
 };
 
 export function ensureDirs() {

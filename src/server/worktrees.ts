@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, lstatSync, readdirSync, realpathSync } from 'nod
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { WORKTREE_DIR, ensureDirs } from './paths.js';
+import { WORKTREE_DIR, DEFAULTS, ensureDirs } from './paths.js';
 
 /**
  * Produce a friendly, stable directory slug for a repository — the same scheme
@@ -62,7 +62,7 @@ export interface DiscoveredRepo {
   defaultBranch: string | null;
 }
 
-const DEFAULT_REPOS_BASE = join(homedir(), 'repositories');
+const DEFAULT_REPOS_BASE = DEFAULTS.reposBase;
 
 export function expandHome(p: string): string {
   if (p.startsWith('~/')) return join(homedir(), p.slice(2));

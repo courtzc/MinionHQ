@@ -15,7 +15,8 @@ import { closeAllLogs } from './logs.js';
 import { isGitRepo, repoToplevel, listBranches, currentBranch, discoverRepos } from './worktrees.js';
 import { readJsonBody, jsonOk, jsonErr, jsonBodyErr } from './httpUtil.js';
 import { LIMITS } from './limits.js';
-import { notifyMac, isMacNotifySupported, type MacNotifyKind } from './macNotify.js';
+import { notifyMac, isMacNotifySupported } from './macNotify.js';
+import { isAlertKind, alertCatalog } from '../shared/alerts.js';
 import {
   ensureRepoContext,
   listRepoContextFiles,
@@ -211,12 +212,6 @@ const WAV_CACHE_DIR = join(tmpdir(), 'minionhq-wav-cache');
 const WAV_CACHE_VERSION = 'v2';
 const wavCache = new Map<string, string>(); // src abs path → cached wav path
 
-const VALID_NOTIFY_KINDS = new Set<string>([
-  'needs-input', 'agent-finished', 'error',
-  'ask-user', 'permission', 'elicitation',
-  'session-spawned', 'session-resumed', 'session-stopped',
-  'tool-failed',
-]);
 function transcodeToWav(srcAbsPath: string): string | null {
   try {
     const st = statSync(srcAbsPath);
@@ -435,11 +430,11 @@ const httpServer = createServer(async (req, res) => {
       try {
         const body = await readJsonBody<{ kind?: string; sessionLabel?: string | null; body?: string; openUrl?: string }>(req);
         const kind = body.kind;
-        if (typeof kind !== 'string' || !VALID_NOTIFY_KINDS.has(kind)) {
+        if (typeof kind !== 'string' || !isAlertKind(kind)) {
           return jsonErr(res, 400, 'invalid notify kind');
         }
         const transport = await notifyMac({
-          kind: kind as MacNotifyKind,
+          kind,
           sessionLabel: body.sessionLabel ?? null,
           body: body.body,
           openUrl: body.openUrl,
@@ -453,6 +448,12 @@ const httpServer = createServer(async (req, res) => {
   }
   if (url.pathname === '/api/notify/capabilities') {
     return jsonOk(res, { mac: isMacNotifySupported() });
+  }
+  // Public catalogue of alert kinds. The chimes picker (chimes.html)
+  // renders one row per entry, so adding a new kind to
+  // src/shared/alerts.ts is the only thing required to surface it in the UI.
+  if (url.pathname === '/api/alerts/catalog') {
+    return jsonOk(res, { alerts: alertCatalog() });
   }
   // POST /api/attachments?id=<sessionId>&name=<filename.png>
   // Body: raw binary blob (image/file). Saves the blob into

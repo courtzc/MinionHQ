@@ -892,7 +892,7 @@ function openNewSessionModal(): void {
     <div class="modal">
       <h2>new minion session</h2>
       <label>
-        <span>repo <em>(from <code id="cm-base-dir">~/repositories</code> · <a href="#" id="cm-change-base">change</a>)</em></span>
+        <span>repo <em>(from <code id="cm-base-dir">(server default)</code> · <a href="#" id="cm-change-base">change</a>)</em></span>
         <select id="cm-repo-select" autofocus>
           <option value="">(loading…)</option>
         </select>
@@ -927,8 +927,11 @@ function openNewSessionModal(): void {
   const baseDirEl   = overlay.querySelector('#cm-base-dir') as HTMLElement;
   const changeBase  = overlay.querySelector('#cm-change-base') as HTMLAnchorElement;
 
-  let currentBase = lastBase || '~/repositories';
-  baseDirEl.textContent = currentBase;
+  // Empty `currentBase` means "ask the server for its default" — the server
+  // honours MINIONHQ_REPOS_BASE there. Once we've heard back we cache it
+  // in localStorage so subsequent opens are instant.
+  let currentBase = lastBase || '';
+  baseDirEl.textContent = currentBase || '(server default)';
 
   async function discoverAndFill(base: string): Promise<void> {
     repoSelect.innerHTML = '<option value="">(loading…)</option>';

@@ -17,18 +17,9 @@
 // caller. Keep this module pure-ish and predictable.
 
 import type { SessionStatus, InputCause } from '../shared/protocol.js';
+import { type AlertKind, priorityOf } from '../shared/alerts.js';
 
-export type AlertKind =
-  | 'needs-input'
-  | 'agent-finished'
-  | 'error'
-  | 'ask-user'
-  | 'permission'
-  | 'elicitation'
-  | 'session-spawned'
-  | 'session-resumed'
-  | 'session-stopped'
-  | 'tool-failed';
+export type { AlertKind };
 
 /**
  * Map a status transition (+ optional InputCause) to an alert kind, or `null`.
@@ -55,23 +46,11 @@ export function alertKindFor(prev: SessionStatus, next: SessionStatus, cause?: I
   return null;
 }
 
-// Higher number wins inside the settle window. needs-input variants share
-// the same tier — within a single burst the latest cause wins (no upgrade /
-// downgrade). Error always trumps. Lifecycle chimes (spawned/resumed/stopped)
-// are NOT routed through the dispatcher (they're fired directly), so they
-// don't appear here.
-const PRIORITY: Record<AlertKind, number> = {
-  error: 5,
-  'needs-input': 3,
-  'ask-user': 3,
-  'permission': 3,
-  'elicitation': 3,
-  'tool-failed': 2,
-  'agent-finished': 1,
-  'session-spawned': 0,
-  'session-resumed': 0,
-  'session-stopped': 0,
-};
+// Higher number wins inside the settle window. Priorities live in the
+// shared alert registry (src/shared/alerts.ts) — change them there and
+// every consumer follows. We read through priorityOf() instead of caching
+// a local map so a future picker that lets the user re-prioritise kinds
+// at runtime can flow through without changing the dispatcher.
 
 export interface DispatcherOpts {
   /** How long to wait after the LAST transition before firing. */
@@ -142,7 +121,7 @@ export class AlertDispatcher {
       // Keep whichever kind is higher priority — needs-input arriving after
       // a queued agent-finished should upgrade the alert, but a late
       // agent-finished must NOT downgrade a queued needs-input.
-      winner = PRIORITY[kind] >= PRIORITY[existing.kind] ? kind : existing.kind;
+      winner = priorityOf(kind) >= priorityOf(existing.kind) ? kind : existing.kind;
     }
 
     const timer = this.setTimer(() => {

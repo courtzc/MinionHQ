@@ -634,18 +634,25 @@
     ];
 
     // ─── Event catalogue ───────────────────────────────────────────────────
-    const EVENTS = [
-      { id: 'needs-input',     tier: 'active',       name: 'needs-input',     desc: 'Session is waiting on you (any input/permission/elicitation).' },
-      { id: 'agent-finished',  tier: 'active',       name: 'agent-finished',  desc: 'Agent finished a turn and is idle.' },
-      { id: 'error',           tier: 'active',       name: 'error',           desc: 'Session entered error state.' },
-      { id: 'ask-user',        tier: 'sub',         name: 'ask_user',        desc: 'Agent specifically asked a question (subset of needs-input).' },
-      { id: 'permission',      tier: 'sub',         name: 'permission_request', desc: 'Agent wants to run a tool that needs approval.' },
-      { id: 'elicitation',     tier: 'sub',         name: 'elicitation',     desc: 'Structured form / OAuth handoff requested.' },
-      { id: 'session-spawned', tier: 'lifecycle',   name: 'session-spawned', desc: 'A new session was just created.' },
-      { id: 'session-resumed', tier: 'lifecycle',   name: 'session-resumed', desc: 'A dormant session was woken up.' },
-      { id: 'session-stopped', tier: 'lifecycle',   name: 'session-stopped', desc: 'A session was torn down.' },
-      { id: 'tool-failed',     tier: 'aspirational',name: 'tool-failed',     desc: 'A single tool call returned an error (session not killed).' },
-    ];
+    // Fetched from /api/alerts/catalog so adding a new AlertKind to
+    // src/shared/alerts.ts is the only step required to surface it here.
+    let EVENTS = [];
+    async function loadEvents() {
+      try {
+        const r = await fetch('/api/alerts/catalog');
+        const j = await r.json();
+        if (j && Array.isArray(j.alerts)) {
+          EVENTS = j.alerts.map((a) => ({
+            id: a.id,
+            tier: a.tier,
+            name: a.displayName || a.id,
+            desc: a.description || '',
+          }));
+        }
+      } catch (e) {
+        console.warn('[chimes] failed to load alert catalogue:', e);
+      }
+    }
 
     // ─── Render ────────────────────────────────────────────────────────────
     const chimeListEl = document.getElementById('chime-list');
@@ -665,7 +672,7 @@
     }
 
     async function init() {
-      const macos = await loadMacOSChimes();
+      const [macos] = await Promise.all([loadMacOSChimes(), loadEvents()]);
       const ALL = [...macos, ...MUSICAL_CHIMES, ...SYNTH_CHIMES];
 
       // Render chimes grouped by category

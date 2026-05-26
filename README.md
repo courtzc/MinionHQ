@@ -97,14 +97,67 @@ End-to-end keystroke latency on localhost is ~5ms — imperceptible vs running C
 
 Optional env vars (all default to sensible values):
 
-| Env var               | Default       | Purpose                              |
-| --------------------- | ------------- | ------------------------------------ |
-| `MINIONHQ_HOST`       | `127.0.0.1`   | HTTP/WS listen host                  |
-| `MINIONHQ_PORT`       | `4242`        | HTTP/WS listen port                  |
-| `MINIONHQ_COPILOT_BIN`| `copilot`     | Path to the Copilot CLI binary       |
-| `MINIONHQ_HOME`       | `~/.minionhq` | Data dir (db, logs, worktrees, repo context) |
+| Env var                | Default       | Purpose                                       |
+| ---------------------- | ------------- | --------------------------------------------- |
+| `MINIONHQ_HOST`        | `127.0.0.1`   | HTTP/WS listen host                           |
+| `MINIONHQ_PORT`        | `4242`        | HTTP/WS listen port                           |
+| `MINIONHQ_COPILOT_BIN` | `copilot`     | Path to the Copilot CLI binary                |
+| `MINIONHQ_HOME`        | `~/.minionhq` | Data dir (db, logs, worktrees, repo context)  |
+| `MINIONHQ_REPOS_BASE`  | `~/repositories` | Default base dir for repo discovery (overridable in the new-session modal) |
 
-Repo discovery looks under `~/repositories`.
+Repo discovery looks under `MINIONHQ_REPOS_BASE` (default `~/repositories`).
+
+## Hacking
+
+```
+src/
+├── shared/         types & registries used by BOTH server and browser
+│   ├── protocol.ts   ServerMsg / ClientMsg / SessionStatus / SessionStats
+│   ├── alerts.ts     ⭐ ONE source of truth for chime / notification kinds
+│   └── binProtocol.ts pty binary-frame helpers
+├── server/         Node-side: PTY spawning, SQLite, HTTP/WS, OS notifications
+│   ├── index.ts      HTTP+WS server, all REST endpoints
+│   ├── sessions.ts   per-session lifecycle, CLI event parsing, status derivation
+│   ├── worktrees.ts  git worktree creation + repo discovery
+│   ├── macNotify.ts  native macOS toasts (terminal-notifier / osascript)
+│   ├── logs.ts       events.jsonl + pty.log tailing
+│   ├── context.ts    shared per-repo central context
+│   └── …
+├── web/            Browser bundle (esbuilt to public/app.js)
+│   ├── app.ts        SPA shell: tabs, terminal, footer, modals
+│   ├── alertDispatcher.ts  coalesces status transitions → chime/notify
+│   ├── chimes.ts     Web Audio decoded-buffer cache + playback
+│   ├── notify.ts     browser / mac notification router
+│   ├── repoColors.ts deterministic per-repo color hashing
+│   └── chimes.html   standalone picker page (fetches /api/alerts/catalog)
+└── test/           node --test suite (FakeClock harness, contract tests)
+```
+
+**Adding a new alert kind**: append one entry to `ALERTS` in `src/shared/alerts.ts`. TypeScript will fail every consumer (`Record<AlertKind, …>`) until you fill in the new entry. No other file needs to change — the picker, the dispatcher priority, the browser title, and the OS sound all flow from the registry.
+
+**Scripts**:
+
+```bash
+npm start         # production server (no auto-restart)
+npm run dev       # node --watch for hot reload
+npm run typecheck # tsc --noEmit
+npm test          # node --test test/*.test.ts (59 tests, ~300ms)
+npm run build:web # esbuild → public/
+```
+
+## Troubleshooting
+
+**`Error: cannot find module node-pty`** — the postinstall step that rebuilds `node-pty` against your Node binary didn't run, or you switched Node versions since. Re-run `npm install` (or just `node scripts/fix-node-pty.mjs`).
+
+**`copilot: command not found` when spawning a session** — install the [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) and ensure `copilot` is on `$PATH`, or set `MINIONHQ_COPILOT_BIN=/abs/path/to/copilot`.
+
+**No repos in the dropdown** — the default discovery base is `~/repositories`. Either move your checkouts there, set `MINIONHQ_REPOS_BASE=/other/path`, or click *change* in the new-session modal.
+
+**No OS notifications on macOS** — install `terminal-notifier` (`brew install terminal-notifier`) for click-to-focus and the minion icon. The fallback `osascript` path always works but has no click handler.
+
+**Chime is silent the first time** — browsers gate `AudioContext` on the first user gesture. Click anywhere in the dashboard once; the audio is pre-warmed thereafter.
+
+**Port already in use** — `lsof -ti:4242 | xargs kill` and `npm start` again, or set `MINIONHQ_PORT=4343`.
 
 ## Status
 
@@ -112,4 +165,4 @@ Pre-1.0. Works for the author on macOS daily. Expect rough edges. Not packaged f
 
 ## License
 
-MIT
+[MIT](LICENSE)

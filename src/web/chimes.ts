@@ -8,38 +8,14 @@
 // Chromium browsers can't decode AIFF directly, but the server transcodes
 // to FLLR-stripped 16-bit LE PCM WAV which decodes everywhere.
 //
-// The picker assigns one chime per "kind" — a logical event class. The
-// dispatcher (alertDispatcher.ts) picks the kind, this module just plays it.
-//
-// IMPORTANT: keep this set in sync with `AlertKind` in alertDispatcher.ts.
+// Kind/sound metadata lives in `src/shared/alerts.ts`; this module just
+// turns AlertKind → AudioBuffer → speaker. To add a new kind, add it to
+// the registry, not here.
 
-export type ChimeKind =
-  | 'needs-input'      // generic "I need a human" (fallback when cause unknown)
-  | 'agent-finished'   // turn complete, ready for next prompt
-  | 'error'            // session went into error state
-  | 'ask-user'         // agent invoked the ask_user interactive tool
-  | 'permission'       // permission.requested gate awaiting approval
-  | 'elicitation'      // elicitation.requested prompt
-  | 'session-spawned'  // user just started a new minion
-  | 'session-resumed'  // user resumed a dormant minion
-  | 'session-stopped'  // session ended (clean exit or close)
-  | 'tool-failed';     // a single tool call failed (session keeps running)
+import { type AlertKind, ALERTS, ALERT_KINDS, defaultSoundOf } from '../shared/alerts.js';
 
-// User-picked mapping (May 2026, via chimes.html picker). Each value is the
-// macOS system sound name (no extension); we resolve it through
-// /api/system-sound/system/<name>.aiff which transcodes on demand.
-const CHIME_MAP: Record<ChimeKind, string | null> = {
-  'needs-input': 'Hero',
-  'agent-finished': 'Submarine',
-  'error': 'Sosumi',
-  'ask-user': 'Hero',
-  'permission': 'Purr',
-  'elicitation': 'Funk',
-  'session-spawned': 'Blow',
-  'session-resumed': 'Blow',
-  'session-stopped': 'Bottle',
-  'tool-failed': 'Ping',
-};
+/** Re-export so existing callsites keep compiling. */
+export type ChimeKind = AlertKind;
 
 // Per-kind gain. macOS system sounds vary wildly in loudness — Submarine
 // is gentle, Sosumi is sharp. Adjust here if any feel out of balance; the
@@ -115,8 +91,10 @@ export function playChime(kind: ChimeKind): void {
   if (now - lastPlayedAt < MIN_GAP_MS) return;
   lastPlayedAt = now;
 
-  const soundName = CHIME_MAP[kind];
-  if (!soundName) return; // mapped to silence — fine.
+  // Resolve through the registry. A future user-override layer can swap in
+  // here without touching call sites.
+  const soundName = defaultSoundOf(kind);
+  if (!soundName) return;
 
   // Fire-and-forget — we don't want a slow decode to block the UI thread
   // or hold up the dispatcher. Errors are logged and swallowed.
@@ -142,10 +120,12 @@ export function unlockAudio(): void {
   // doesn't lose its envelope to the resume() race. Also kicks off a fetch
   // for the most common chime so playback is instant on first event.
   void unlockedAc().then(() => {
-    // Speculatively prefetch the highest-frequency chimes.
-    const warm: ChimeKind[] = ['agent-finished', 'needs-input', 'ask-user'];
+    // Speculatively prefetch the chimes most likely to fire in the first
+    // few seconds. We pull them from the registry so adding a new
+    // priority-3 kind tomorrow doesn't require touching this list.
+    const warm: ChimeKind[] = ALERT_KINDS.filter((k) => ALERTS[k].priority >= 3);
     for (const k of warm) {
-      const name = CHIME_MAP[k];
+      const name = defaultSoundOf(k);
       if (name) loadBuffer(name).catch(() => { /* ignore prefetch errors */ });
     }
   });

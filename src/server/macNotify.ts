@@ -20,19 +20,12 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
+import { type AlertKind, browserToastTitle, defaultSoundOf } from '../shared/alerts.js';
+
 const execFileP = promisify(execFile);
 
-export type MacNotifyKind =
-  | 'needs-input'
-  | 'agent-finished'
-  | 'error'
-  | 'ask-user'
-  | 'permission'
-  | 'elicitation'
-  | 'session-spawned'
-  | 'session-resumed'
-  | 'session-stopped'
-  | 'tool-failed';
+/** Alias for backwards compatibility with older imports. */
+export type MacNotifyKind = AlertKind;
 
 const IS_DARWIN = process.platform === 'darwin';
 
@@ -75,41 +68,18 @@ async function detect(): Promise<void> {
 }
 
 /**
- * macOS system sound names (without extension). Mirrors the user-picked
- * chime mapping in src/web/chimes.ts so the OS toast plays the same sound
- * the browser plays via Web Audio. Both `chimes` and `notifications`
- * toggles are independent in the UI — when both are on, the user hears
- * the same sound once from the browser and once from Notification Center.
+ * macOS system sound + title strings come from the shared alert registry
+ * (src/shared/alerts.ts). The browser plays the same sound (via Web Audio)
+ * and renders the same title (via the Notification API) for any kind, so
+ * if both toggles are on the user hears one chime from the browser and one
+ * from Notification Center — by design.
  */
 function soundFor(kind: MacNotifyKind): string {
-  switch (kind) {
-    case 'needs-input':     return 'Hero';
-    case 'agent-finished':  return 'Submarine';
-    case 'error':           return 'Sosumi';
-    case 'ask-user':        return 'Hero';
-    case 'permission':      return 'Purr';
-    case 'elicitation':     return 'Funk';
-    case 'session-spawned': return 'Blow';
-    case 'session-resumed': return 'Blow';
-    case 'session-stopped': return 'Bottle';
-    case 'tool-failed':     return 'Ping';
-  }
+  return defaultSoundOf(kind);
 }
 
 function titleFor(kind: MacNotifyKind, sessionLabel: string | null): string {
-  const tag = sessionLabel ? ` — ${sessionLabel}` : '';
-  switch (kind) {
-    case 'needs-input':     return `MinionHQ: needs input${tag}`;
-    case 'ask-user':        return `MinionHQ: agent has a question${tag}`;
-    case 'permission':      return `MinionHQ: permission required${tag}`;
-    case 'elicitation':     return `MinionHQ: input requested${tag}`;
-    case 'agent-finished':  return `MinionHQ: agent finished${tag}`;
-    case 'error':           return `MinionHQ: error${tag}`;
-    case 'tool-failed':     return `MinionHQ: tool failed${tag}`;
-    case 'session-spawned': return `MinionHQ: session started${tag}`;
-    case 'session-resumed': return `MinionHQ: session resumed${tag}`;
-    case 'session-stopped': return `MinionHQ: session stopped${tag}`;
-  }
+  return browserToastTitle(kind, sessionLabel);
 }
 
 function escapeAppleScript(s: string): string {
