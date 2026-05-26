@@ -36,6 +36,7 @@ import {
   type ServerMsg,
   type SessionStatus,
   type InputCause,
+  type SessionStats,
 } from '../shared/protocol.js';
 
 ensureDirs();
@@ -782,6 +783,12 @@ sessionManager.on('tool_failed', ({ id, tool }: { id: string; tool?: string }) =
   // Side-channel signal — a single tool call returned failure but the
   // session is still running. The dashboard plays its tool-failed chime.
   broadcast({ t: 'session.tool_failed', id, ...(tool ? { tool } : {}) });
+});
+
+sessionManager.on('stats', ({ id, stats }: { id: string; stats: SessionStats }) => {
+  // Debounced — see scheduleStatsBroadcast. The footer is informational; we
+  // tolerate ~200ms lag in exchange for a much quieter WS during bursty turns.
+  broadcast({ t: 'session.stats', id, stats });
 });
 
 httpServer.listen(DEFAULTS.port, DEFAULTS.host, () => {

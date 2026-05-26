@@ -303,6 +303,16 @@ main#panes {
 }
 .status .spacer { flex: 1; }
 .status .sep { color: var(--border); }
+.status .sep[data-show="0"] { display: none; }
+#stats-line {
+  /* Surfaces active-session running stats — model · turns · ↑tokens · tools.
+     Hidden until there's something to show (handled by data-show toggle). */
+  color: var(--fg-dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+#stats-line[data-show="0"] { display: none; }
 .status .toggle {
   background: transparent;
   border: 1px solid var(--border);
@@ -422,7 +432,13 @@ main#panes {
 }
 
 /* ─── Popout (single-session) mode ─── */
-body.popout { grid-template-rows: 32px 1fr 24px; }
+body.popout {
+  grid-template-rows: 32px 1fr 24px;
+  /* Ambient repo-color top stripe so a glance across monitors confirms
+     which session this window owns. Falls back to the accent colour
+     until ensureTab has had a chance to set --repo-color. */
+  border-top: 3px solid var(--repo-color, var(--accent));
+}
 body.popout .topbar {
   padding: 0 8px;
   gap: 8px;
@@ -431,6 +447,33 @@ body.popout .tabs,
 body.popout .actions,
 body.popout .tab-new {
   display: none !important;
+}
+.popout-badge {
+  display: none;
+}
+body.popout .popout-badge[data-show="1"] {
+  /* Mirror of the main-window tab badge: shared transparent minion png
+     with the popout's "M<n>" position number overlaid in the repo accent
+     colour stroke. Kept visually identical to .tab::before so the user
+     instantly recognises which Minion this window is. */
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background-image: url('/minion.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  flex-shrink: 0;
+  font-family: -apple-system, system-ui, Arial, sans-serif;
+  font-weight: 900;
+  font-size: 12px;
+  line-height: 1;
+  padding-bottom: 3px;
+  color: #1a1a1a;
+  -webkit-text-stroke: 2px var(--repo-color, #ffd84a);
+  paint-order: stroke fill;
 }
 body.popout .topbar .popout-title {
   flex: 1;

@@ -1,6 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import type { ClientMsg, ServerMsg, SessionMeta, SessionStatus, InputCause } from '../shared/protocol.js';
+import type { ClientMsg, ServerMsg, SessionMeta, SessionStatus, SessionStats, InputCause } from '../shared/protocol.js';
 import { playChime, unlockAudio } from './chimes.js';
 import { ensurePermission, notify } from './notify.js';
 import { colorForRepo } from './repoColors.js';
@@ -28,6 +28,14 @@ interface TabState {
   workingStartedAt: number | null;
   /** Cached <span class="elapsed"> inside tabEl, updated by the ticker. */
   elapsedEl: HTMLSpanElement;
+  /** Lifecycle chime queued from `session.created` and fired on the first
+   *  transition out of `spawning`. We hold it back so the spawn chime plays
+   *  when the agent is actually ready (status → idle/working), not when the
+   *  PTY first appears. Cleared after it fires. */
+  pendingSpawnChime: 'session-spawned' | 'session-resumed' | null;
+  /** Most recent stats received from the server. The footer renders these
+   *  for the active tab. Defaults to zeros until a `session.stats` arrives. */
+  stats: SessionStats;
 }
 
 const tabs = new Map<string, TabState>();
@@ -157,12 +165,21 @@ function handleServerMsg(msg: ServerMsg) {
       console.log('server protocol', msg.protocolVersion);
       break;
     case 'session.list':
-      for (const m of msg.sessions) {
-        // Popout mode: only render the one session we were opened for.
-        if (IS_POPOUT && m.id !== POPOUT_ID) continue;
-        // Dormant sessions live in the resume picker, not the main tab bar.
-        if (m.dormant) continue;
-        ensureTab(m, IS_POPOUT);
+      {
+        // Track the source-of-truth list order so popout windows can derive
+        // their own "M<n>" position from the same view the main window uses.
+        const visible = msg.sessions.filter((m) => !m.dormant);
+        for (const m of msg.sessions) {
+          // Popout mode: only render the one session we were opened for.
+          if (IS_POPOUT && m.id !== POPOUT_ID) continue;
+          // Dormant sessions live in the resume picker, not the main tab bar.
+          if (m.dormant) continue;
+          ensureTab(m, IS_POPOUT);
+        }
+        if (IS_POPOUT && POPOUT_ID) {
+          const n = visible.findIndex((m) => m.id === POPOUT_ID) + 1;
+          if (n > 0) applyPopoutIdentity(n);
+        }
       }
       if (tabs.size === 0 && activeId == null) renderEmpty();
       else restoreActiveFromLS();
@@ -175,16 +192,27 @@ function handleServerMsg(msg: ServerMsg) {
       {
         const wasResumed = recentlyResumedIds.delete(msg.session.id);
         ensureTab(msg.session, true);
-        // Lifecycle chime — fired directly (not via the dispatcher) since this
-        // doesn't correspond to a status transition.
-        if (chimesEnabled && !poppedOutSessions.has(msg.session.id)) {
-          playChime(wasResumed ? 'session-resumed' : 'session-spawned');
+        // Queue the lifecycle chime to fire when the agent actually becomes
+        // ready (status leaves `spawning`) rather than at PID-spawn time —
+        // otherwise the chime plays before Copilot's prompt has appeared and
+        // feels disconnected from when the session is usable.
+        const t = tabs.get(msg.session.id);
+        if (t && !poppedOutSessions.has(msg.session.id)) {
+          t.pendingSpawnChime = wasResumed ? 'session-resumed' : 'session-spawned';
         }
       }
       break;
     case 'session.status':
       updateStatus(msg.id, msg.status, msg.cause);
       break;
+    case 'session.stats': {
+      const t = tabs.get(msg.id);
+      if (t) {
+        t.stats = msg.stats;
+        if (msg.id === activeId) updateFooterStats();
+      }
+      break;
+    }
     case 'session.tool_failed': {
       // A single tool call failed but the session keeps running — distinct
       // chime so we don't conflate with full session errors. Goes through the
@@ -421,7 +449,19 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     });
     attachUploadHandlers(meta.id, termWrap);
 
-    t = { meta, term, fit, tabEl, paneEl, loadingEl, firstByteSeen: false, workingStartedAt: null, elapsedEl };
+    t = {
+      meta,
+      term,
+      fit,
+      tabEl,
+      paneEl,
+      loadingEl,
+      firstByteSeen: false,
+      workingStartedAt: null,
+      elapsedEl,
+      pendingSpawnChime: null,
+      stats: meta.stats ?? { model: null, turns: 0, outputTokens: 0, toolCalls: 0 },
+    };
     tabs.set(meta.id, t);
 
     // refit on container resize
@@ -432,6 +472,7 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     // Tab already exists — update its meta so status/branch/etc reflect the
     // latest server-side state (covers resume: dormant → spawning).
     t.meta = meta;
+    if (meta.stats) t.stats = meta.stats;
     const labelNode = t.tabEl.querySelector('.label') as HTMLElement | null;
     if (labelNode) {
       labelNode.textContent = labelFor(meta);
@@ -452,6 +493,11 @@ function ensureTab(meta: SessionMeta, makeActive: boolean) {
     document.title = `MinionHQ · ${labelFor(meta)}`;
     const ptitle = document.getElementById('popout-title');
     if (ptitle) ptitle.textContent = labelFor(meta);
+    // Mirror the tab's repo accent onto the body so the popout chrome
+    // (top-border, badge ring) matches the colour that ran on the main
+    // window. The badge number itself comes from session.list ordering —
+    // applyPopoutIdentity handles it there.
+    document.body.style.setProperty('--repo-color', colorForRepo(meta.repoPath ?? null));
   }
 
   // Subscribe to the session's PTY stream. Always send attach — the server
@@ -482,6 +528,66 @@ function activate(id: string) {
       setTimeout(() => t.term.focus(), 0);
     }
   }
+  updateFooterStats();
+}
+
+/**
+ * Render the active tab's running stats in the footer (model · turns ·
+ * tokens · tools). Surfaces only what events.jsonl actually emits — the
+ * CLI doesn't publish input/context tokens, so we don't fake them. Called
+ * on activate() and on each `session.stats` for the active tab. Hidden
+ * when there's no active session or no useful stats yet. Popout mode skips
+ * this entirely — the footer is single-session there already.
+ */
+function updateFooterStats(): void {
+  const line = document.getElementById('stats-line');
+  const sep = document.getElementById('stats-sep');
+  if (!line || !sep) return;
+  if (IS_POPOUT) { line.dataset.show = '0'; sep.dataset.show = '0'; return; }
+  const t = activeId ? tabs.get(activeId) : null;
+  if (!t) { line.dataset.show = '0'; sep.dataset.show = '0'; line.textContent = ''; return; }
+  const parts: string[] = [];
+  if (t.stats.model) parts.push(shortModelName(t.stats.model));
+  if (t.stats.turns > 0) parts.push(`${t.stats.turns} turn${t.stats.turns === 1 ? '' : 's'}`);
+  if (t.stats.outputTokens > 0) parts.push(`↑${formatTokens(t.stats.outputTokens)}`);
+  if (t.stats.toolCalls > 0) parts.push(`${t.stats.toolCalls} tool${t.stats.toolCalls === 1 ? '' : 's'}`);
+  if (parts.length === 0) { line.dataset.show = '0'; sep.dataset.show = '0'; line.textContent = ''; return; }
+  line.textContent = parts.join(' · ');
+  line.dataset.show = '1';
+  sep.dataset.show = '1';
+}
+
+/** Trim model ids to fit the footer without scrolling. Keeps the
+ *  human-readable family name; drops vendor-internal suffixes. */
+function shortModelName(m: string): string {
+  // claude-opus-4.7-1m-internal → claude-opus-4.7
+  // gpt-5.2-codex → gpt-5.2-codex (already short)
+  const stripped = m.replace(/-(1m|preview|internal|high|xhigh)(-internal)?$/i, '')
+                    .replace(/-internal$/i, '');
+  return stripped.length > 24 ? stripped.slice(0, 23) + '…' : stripped;
+}
+
+/** Compact token counts: 1234 → 1.2k, 12345 → 12k, 1234567 → 1.2M. */
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  if (n < 1_000_000) return Math.round(n / 1000) + 'k';
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+}
+
+/**
+ * Stamp the popout window's identity (Minion number) into the topbar badge.
+ * Called whenever session.list refreshes so the number tracks the same view
+ * the main window's tabs see. Colour was already applied to `body` in
+ * ensureTab from the session's repoPath, so the badge picks up `--repo-color`
+ * via CSS. No-op outside popout mode.
+ */
+function applyPopoutIdentity(n: number): void {
+  if (!IS_POPOUT) return;
+  const badge = document.getElementById('popout-badge');
+  if (!badge) return;
+  badge.textContent = String(n);
+  badge.dataset.show = '1';
 }
 
 function restoreActiveFromLS() {
@@ -689,6 +795,15 @@ function updateStatus(id: string, status: SessionStatus, cause?: InputCause) {
   // Hide the loading overlay once the session leaves 'spawning'.
   if (status !== 'spawning' && t.loadingEl.dataset.hidden !== '1') {
     t.loadingEl.dataset.hidden = '1';
+  }
+
+  // Fire the lifecycle chime queued at session.created the moment the agent
+  // is actually ready (status leaves spawning). One-shot — cleared after.
+  if (prev === 'spawning' && status !== 'spawning' && t.pendingSpawnChime) {
+    if (chimesEnabled && !poppedOutSessions.has(id)) {
+      playChime(t.pendingSpawnChime);
+    }
+    t.pendingSpawnChime = null;
   }
 
   if (prev === status) return;

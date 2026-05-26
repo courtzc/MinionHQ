@@ -14,6 +14,7 @@
       <img src="/minion.png" alt="" class="brand-logo" />
       <span class="brand-name">Minion<span>HQ</span></span>
     </div>
+    <span class="popout-badge" id="popout-badge" aria-hidden="true"></span>
     <span class="popout-title" id="popout-title"></span>
     <nav class="tabs" id="tabs">
       <button class="tab-new" id="inline-new" title="New session (⌃⌥T)" aria-label="New session">+</button>
@@ -78,6 +79,8 @@
   </aside>
   <footer class="status">
     <span id="conn-state">connecting…</span>
+    <span class="sep" id="stats-sep" data-show="0">·</span>
+    <span id="stats-line" data-show="0" title="Active session — model · turns · output tokens · tools"></span>
     <span class="spacer"></span>
     <button class="toggle" id="toggle-chimes" data-on="1" title="play chimes on status changes">🔔 chimes</button>
     <button class="toggle" id="toggle-notify" data-on="1" title="OS notifications on status changes">📨 notify</button>

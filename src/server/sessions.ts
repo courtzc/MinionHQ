@@ -12,7 +12,7 @@ import { LIMITS } from './limits.js';
 import { createWorktree, saveWorktreeWork, isGitRepo, repoToplevel } from './worktrees.js';
 import { setupWorktreeContext, appendTranscriptIndex } from './context.js';
 import { RingBuffer } from './ringBuffer.js';
-import type { SessionMeta, SessionStatus, InputCause } from '../shared/protocol.js';
+import type { SessionMeta, SessionStatus, InputCause, SessionStats } from '../shared/protocol.js';
 
 const REPLAY_MAX = 256 * 1024;
 const SESSION_STATE_ROOT = join(homedir(), '.copilot', 'session-state');
@@ -104,6 +104,12 @@ interface Internal {
    * to stay in 'working' once; turn_start clears it.
    */
   suppressNextTurnEndIdle: boolean;
+  /** Running counters surfaced in the dashboard footer. Reset on resume —
+   *  the source events.jsonl naturally starts emitting again after resume. */
+  stats: SessionStats;
+  /** Debounce handle for `stats` broadcasts: stats updates can fire on every
+   *  assistant message, but the footer only needs eventual consistency. */
+  statsBroadcastTimer: NodeJS.Timeout | null;
 }
 
 const RESUME_AUTOANSWER_MAX_BYTES = 32 * 1024;
@@ -126,7 +132,7 @@ class SessionManager extends EventEmitter {
   private exitPromises = new Map<string, Promise<void>>();
 
   list(): SessionMeta[] {
-    return [...this.sessions.values()].map((s) => ({ ...s.meta }));
+    return [...this.sessions.values()].map((s) => ({ ...s.meta, stats: { ...s.stats } }));
   }
 
   get(id: string): SessionMeta | null {
@@ -246,6 +252,8 @@ class SessionManager extends EventEmitter {
       tailWaitTimer: null,
       toolStartTs: new Map(),
       suppressNextTurnEndIdle: false,
+      stats: { model: null, turns: 0, outputTokens: 0, toolCalls: 0 },
+      statsBroadcastTimer: null,
     };
     this.sessions.set(id, internal);
 
@@ -519,6 +527,8 @@ class SessionManager extends EventEmitter {
         tailWaitTimer: null,
         toolStartTs: new Map(),
         suppressNextTurnEndIdle: false,
+        stats: { model: null, turns: 0, outputTokens: 0, toolCalls: 0 },
+        statsBroadcastTimer: null,
       });
       restored++;
     }
@@ -574,6 +584,59 @@ class SessionManager extends EventEmitter {
         .run(status, s.meta.updatedAt, id);
     } catch { /* ignore */ }
     this.emit('status', { id, status, cause });
+  }
+
+  /** Snapshot of the live stats for this session, or null if unknown. */
+  statsFor(id: string): SessionStats | null {
+    const s = this.sessions.get(id);
+    return s ? { ...s.stats } : null;
+  }
+
+  /**
+   * Update running stats from a single CLI event. Cheap and side-effect-free
+   * apart from mutating `s.stats` and scheduling a debounced broadcast — the
+   * footer is informational so we don't want to flood the WS on bursty turns.
+   */
+  private updateStats(s: Internal, type: string, data: Record<string, unknown>): void {
+    let changed = false;
+    if (type === 'session.model_change') {
+      const m = data.newModel ?? data.model;
+      if (typeof m === 'string' && m && m !== s.stats.model) {
+        s.stats.model = m;
+        changed = true;
+      }
+    } else if (type === 'assistant.message') {
+      // model can be present here too — keeps the footer in sync if the user
+      // started a session without an explicit model_change event.
+      const m = data.model;
+      if (typeof m === 'string' && m && m !== s.stats.model) {
+        s.stats.model = m;
+        changed = true;
+      }
+      const t = data.outputTokens;
+      if (typeof t === 'number' && Number.isFinite(t) && t > 0) {
+        s.stats.outputTokens += t;
+        changed = true;
+      }
+    } else if (type === 'assistant.turn_start') {
+      s.stats.turns += 1;
+      changed = true;
+    } else if (type === 'tool.execution_complete') {
+      s.stats.toolCalls += 1;
+      changed = true;
+    }
+    if (changed) this.scheduleStatsBroadcast(s);
+  }
+
+  private scheduleStatsBroadcast(s: Internal): void {
+    if (s.statsBroadcastTimer) return;
+    s.statsBroadcastTimer = setTimeout(() => {
+      s.statsBroadcastTimer = null;
+      // Re-check the session is still live before emitting — shutdownAll can
+      // tear sessions down between the schedule and the fire.
+      if (!this.sessions.has(s.meta.id)) return;
+      this.emit('stats', { id: s.meta.id, stats: { ...s.stats } });
+    }, 200);
   }
 
   // ─── JSONL sidecar ────────────────────────────────────────────────────────
@@ -648,6 +711,7 @@ class SessionManager extends EventEmitter {
   private stopTail(s: Internal): void {
     if (s.tailTimer) { clearInterval(s.tailTimer); s.tailTimer = null; }
     if (s.tailWaitTimer) { clearInterval(s.tailWaitTimer); s.tailWaitTimer = null; }
+    if (s.statsBroadcastTimer) { clearTimeout(s.statsBroadcastTimer); s.statsBroadcastTimer = null; }
     if (s.tailFd !== null) {
       try { closeSync(s.tailFd); } catch { /* ignore */ }
       s.tailFd = null;
@@ -688,6 +752,7 @@ class SessionManager extends EventEmitter {
     const type = String(ev.type ?? '');
     const data = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as Record<string, unknown>;
     logEvent(id, `cli.${type}`, data);
+    this.updateStats(s, type, data);
 
     switch (type) {
       case 'session.start':

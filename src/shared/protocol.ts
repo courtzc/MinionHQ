@@ -23,6 +23,25 @@ export interface SessionMeta {
   branch?: string | null;
   /** True when restored from DB on boot with no live PTY. Resumable via session.resume. */
   dormant?: boolean;
+  /** Optional running stats. Filled from events.jsonl while the session
+   *  is live; not persisted, so dormant sessions show zeros until they
+   *  emit their first event on resume. Used by the dashboard footer. */
+  stats?: SessionStats;
+}
+
+/** Cheap running totals for the active-session footer indicator.
+ *  We deliberately track only fields the CLI's events.jsonl actually
+ *  emits — Copilot CLI publishes `outputTokens` per assistant message
+ *  but no input/context tokens, so we surface only what we can verify. */
+export interface SessionStats {
+  /** Most recently announced model id (e.g. 'gpt-5.2', 'claude-opus-4.7'). */
+  model: string | null;
+  /** Number of assistant turns the agent has completed this session. */
+  turns: number;
+  /** Cumulative output tokens across all assistant messages this session. */
+  outputTokens: number;
+  /** Cumulative tool invocations this session. */
+  toolCalls: number;
 }
 
 export type ServerMsg =
@@ -30,6 +49,7 @@ export type ServerMsg =
   | { t: 'session.list'; sessions: SessionMeta[] }
   | { t: 'session.created'; session: SessionMeta }
   | { t: 'session.status'; id: string; status: SessionStatus; cause?: InputCause }
+  | { t: 'session.stats'; id: string; stats: SessionStats }
   | { t: 'session.tool_failed'; id: string; tool?: string }
   | { t: 'pty.data'; id: string; data: string }
   | { t: 'pty.exit'; id: string; code: number | null; signal: string | null }
