@@ -31,6 +31,8 @@ npm start
 
 Open <http://127.0.0.1:4242> in any modern browser. No special terminal emulator needed — the browser handles ANSI via xterm.js.
 
+> **macOS only — optional but recommended:** `brew install terminal-notifier`. Without it, OS notifications fall back to `osascript`, which works but has no click-to-focus and no minion icon.
+
 > **First session**: click **+ new**, pick a repo from the dropdown (defaults to `~/repositories/*`), name the branch (e.g. `feat/foo`), optionally type a starter prompt, and hit *Create*. A new tab appears with Copilot CLI running in a fresh worktree on that branch.
 
 If anything goes wrong, jump to [Troubleshooting](#troubleshooting).
