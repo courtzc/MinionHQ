@@ -13,9 +13,13 @@ Run multiple GitHub Copilot CLI sessions side-by-side in your browser. Each sess
 
 ## Quickstart
 
-You need **macOS or Linux**, **Node.js ≥ 20**, and **git ≥ 2.30**. Then:
+You need **macOS or Linux**, **Node.js ≥ 20**, and **git ≥ 2.30**. On macOS, the easiest setup:
 
 ```bash
+# 0. Prerequisites (skip any you already have)
+brew install node git
+brew install terminal-notifier   # optional — nicer toasts with click-to-focus
+
 # 1. Install the GitHub Copilot CLI and sign in
 npm install -g @github/copilot
 copilot      # follow the device-login prompt the first time, then /exit
@@ -25,13 +29,11 @@ git clone https://github.com/<you>/MinionHQ ~/repositories/MinionHQ
 cd ~/repositories/MinionHQ
 
 # 3. Install + run
-npm install   # postinstall rebuilds node-pty against your Node binary
+npm install   # postinstall rebuilds node-pty and builds the web bundle
 npm start
 ```
 
 Open <http://127.0.0.1:4242> in any modern browser. No special terminal emulator needed — the browser handles ANSI via xterm.js.
-
-> **macOS only — optional but recommended:** `brew install terminal-notifier`. Without it, OS notifications fall back to `osascript`, which works but has no click-to-focus and no minion icon.
 
 > **First session**: click **+ new**, pick a repo from the dropdown (defaults to `~/repositories/*`), name the branch (e.g. `feat/foo`), optionally type a starter prompt, and hit *Create*. A new tab appears with Copilot CLI running in a fresh worktree on that branch.
 
@@ -84,14 +86,20 @@ The `.minionhq/` dir inside each worktree is git-ignored.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/health` | Liveness |
-| `GET` | `/api/repos/discover` | List repos under `~/repositories` |
+| `GET` | `/api/health` | Liveness probe (`{ ok, protocolVersion }`) |
+| `GET` | `/api/repos/discover?base=<dir>` | List git repos under `<dir>` (defaults to `MINIONHQ_REPOS_BASE`) |
 | `GET` | `/api/repo/branches?path=<repo>` | List branches in a repo |
-| `POST` | `/api/intent/create-session` | Spawn a session (`{repo, branch, base?, prompt?}`) |
+| `POST` | `/api/intent/create-session` | Spawn a session (`{repo, branch, base?, prompt?}`) — used by the NL-spawn integration |
 | `GET` | `/api/sessions/dormant` | List resumable sessions |
-| `GET/POST` | `/api/repo/context/*` | Read/write shared context files |
+| `GET/POST` | `/api/repo/context/{list,read,write,delete}` | Shared per-repo context files |
+| `POST` | `/api/attachments?id=<sid>&name=<file>` | Stream-upload a file (image/text) into a session |
+| `GET` | `/api/logs/tail?id=<sid>&stream=<pty\|events>` | Tail the last N bytes of a session's log |
+| `GET` | `/api/alerts/catalog` | Read the alert/chime registry (drives the picker page) |
+| `POST` | `/api/notify` | Server-side notification trigger (`{kind, title?, body?}`) |
+| `GET` | `/api/notify/capabilities` | Probe native OS notification support (`{mac: bool}`) |
+| `GET` | `/api/system-sounds` | List macOS system sounds for chime picker |
 
-WebSocket at `/` for live PTY streams. Binds to `127.0.0.1` only.
+WebSocket at `/` for live PTY streams + status events. Binds to `127.0.0.1` only.
 
 ## Architecture
 

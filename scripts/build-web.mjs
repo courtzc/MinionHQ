@@ -1,12 +1,14 @@
 #!/usr/bin/env node
+// Bundles src/web/app.ts → public/app.js with esbuild, plus copies xterm.css
+// from node_modules. Static assets (HTML / CSS / images) live directly in
+// public/ — tracked in git — so this script only handles generated output.
 import * as esbuild from 'esbuild';
-import { mkdirSync, copyFileSync } from 'node:fs';
+import { copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const outdir = join(root, 'public');
-mkdirSync(outdir, { recursive: true });
 
 await esbuild.build({
   entryPoints: [join(root, 'src/web/app.ts')],
@@ -20,10 +22,8 @@ await esbuild.build({
   absWorkingDir: root,
 });
 
-copyFileSync(join(root, 'src/web/index.html'), join(outdir, 'index.html'));
-copyFileSync(join(root, 'src/web/chimes.html'), join(outdir, 'chimes.html'));
-copyFileSync(join(root, 'src/web/styles.css'), join(outdir, 'styles.css'));
-copyFileSync(join(root, 'src/web/favicon.svg'), join(outdir, 'favicon.svg'));
-copyFileSync(join(root, 'src/web/minion.png'), join(outdir, 'minion.png'));
+copyFileSync(join(root, 'node_modules/@xterm/xterm/css/xterm.css'), join(outdir, 'xterm.css'));
+
+console.log('built public/app.js + xterm.css');
 
 console.log('built public/');

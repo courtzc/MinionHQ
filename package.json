@@ -4,13 +4,33 @@
   "private": true,
   "type": "module",
   "description": "Multi-instance manager for the GitHub Copilot CLI — branch-per-session, rich UI, lossless rendering.",
+  "license": "MIT",
+  "keywords": [
+    "github-copilot",
+    "copilot-cli",
+    "agentic-coding",
+    "git-worktrees",
+    "developer-tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/court/MinionHQ.git"
+  },
+  "bugs": {
+    "url": "https://github.com/court/MinionHQ/issues"
+  },
+  "homepage": "https://github.com/court/MinionHQ#readme",
   "scripts": {
-    "postinstall": "node scripts/fix-node-pty.mjs",
+    "postinstall": "node scripts/fix-node-pty.mjs && node scripts/build-web.mjs",
+    "prestart": "node scripts/build-web.mjs",
     "dev": "node --watch --import tsx src/server/index.ts",
     "start": "node --import tsx src/server/index.ts",
     "build:web": "node scripts/build-web.mjs",
     "typecheck": "tsc --noEmit",
     "test": "MINIONHQ_HOME=$(mktemp -d) node --import tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "esbuild": "^0.24.0",

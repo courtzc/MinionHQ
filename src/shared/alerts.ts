@@ -12,7 +12,7 @@
  *  - {@link ../web/notify.ts} and {@link ../server/macNotify.ts} both
  *    call {@link browserToastTitle} / {@link defaultSoundOf} for their
  *    notification strings.
- *  - The chimes picker (`src/web/chimes.html`) fetches the catalogue from
+ *  - The chimes picker (`public/chimes.html`) fetches the catalogue from
  *    `/api/alerts/catalog` (served from this module) so it renders one
  *    row per kind without a parallel hand-maintained list.
  */
