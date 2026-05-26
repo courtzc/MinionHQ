@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { homedir, platform } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { WORKTREE_DIR, DEFAULTS, ensureDirs } from './paths.js';
 
 /**
@@ -202,7 +202,99 @@ export function createWorktree(opts: CreateOpts): WorktreeInfo {
   // git worktree add -b <branch> <path> <base>
   run('git', ['worktree', 'add', '-b', branch, worktreePath, base], repoPath);
 
+  // Mirror gitignored + untracked files from the source checkout into the new
+  // worktree as a one-time snapshot. Failures are non-fatal — the worktree is
+  // still usable without the snapshot.
+  try {
+    mirrorWorkingDirState(repoPath, worktreePath);
+  } catch (e) {
+    // Surfaced at logEvent layer if needed; keep createWorktree resilient.
+    void e;
+  }
+
   return { repoPath, worktreePath, branch };
+}
+
+/**
+ * Result of a working-dir snapshot mirror. `entries` is the count of top-level
+ * paths copied; failures lists per-path errors (never thrown). Empty everything
+ * on a fresh clean repo is normal.
+ */
+export interface MirrorResult {
+  entries: number;
+  failures: { path: string; message: string }[];
+}
+
+/**
+ * Snapshot-copy every gitignored AND every untracked-not-ignored top-level
+ * entry from `sourceRepo` into `worktreePath`, preserving relative paths.
+ *
+ * Behaviour:
+ *  - Uses `git ls-files --others ...` so enumeration respects the user's
+ *    `.gitignore` exactly — zero per-repo config.
+ *  - Copies directories whole (collapsed by `--directory`) so e.g.
+ *    `node_modules/` is one cp invocation, not a recursive walk in Node.
+ *  - On macOS uses `cp -c -R` (APFS clonefile) so even huge `node_modules`
+ *    snapshots are near-instant and don't double disk usage until edited.
+ *    On Linux falls back to `cp -a` (preserve perms/timestamps).
+ *  - Never overwrites a path that already exists in the worktree
+ *    (tracked files from `git worktree add` win).
+ *  - Always skips `.git`.
+ *  - Failures per-entry are swallowed and returned; the function never throws.
+ *
+ * Because this is a real copy, not a symlink, edits inside the worktree do
+ * NOT propagate back to the source. That isolation is the whole point.
+ */
+export function mirrorWorkingDirState(sourceRepo: string, worktreePath: string): MirrorResult {
+  const result: MirrorResult = { entries: 0, failures: [] };
+  if (!existsSync(sourceRepo) || !existsSync(worktreePath)) return result;
+
+  const seen = new Set<string>();
+  const collect = (args: string[]) => {
+    let out: string;
+    try {
+      out = execFileSync('git', args, { cwd: sourceRepo, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8');
+    } catch {
+      return [] as string[];
+    }
+    // -z output: NUL-separated, no trailing newline trimming traps.
+    return out.split('\0').filter(Boolean);
+  };
+
+  // 1) Ignored entries, with directories collapsed (one path per ignored dir).
+  const ignored = collect(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']);
+  // 2) Untracked-not-ignored entries (so user's in-progress work follows the
+  //    spawn, matching normal `git checkout` semantics).
+  const untracked = collect(['ls-files', '--others', '--exclude-standard', '-z']);
+
+  const isDarwin = platform() === 'darwin';
+  const cpArgs = (src: string, dst: string): string[] =>
+    isDarwin ? ['-c', '-R', src, dst] : ['-a', src, dst];
+
+  for (const rel of [...ignored, ...untracked]) {
+    // Defensive: skip empty, parent traversal, .git, and dupes.
+    if (!rel || rel === '.git' || rel === '.git/' || rel.startsWith('.git/')) continue;
+    if (rel.startsWith('../') || rel.includes('/../')) continue;
+    const norm = rel.endsWith('/') ? rel.slice(0, -1) : rel;
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+
+    const src = join(sourceRepo, norm);
+    const dst = join(worktreePath, norm);
+    if (!existsSync(src)) continue;
+    if (existsSync(dst)) continue; // never clobber tracked files
+
+    try {
+      const parent = dirname(dst);
+      if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
+      execFileSync('cp', cpArgs(src, dst), { stdio: ['ignore', 'ignore', 'pipe'] });
+      result.entries++;
+    } catch (e) {
+      result.failures.push({ path: norm, message: (e as Error).message.slice(0, 200) });
+    }
+  }
+
+  return result;
 }
 
 export interface SaveResult {

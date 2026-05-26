@@ -122,6 +122,21 @@ Before ending any non-trivial response, update \`./.minionhq/status.md\` with:
 
 This lets a future session (or you, after compaction) pick up where you left off.
 
+## Gitignored files (IMPORTANT)
+
+When this worktree was spawned, MinionHQ copied gitignored files (e.g.
+\`.env\`, scratch notes, \`node_modules/\`) from the source checkout at
+**\`${opts.repoPath}\`** as a one-time snapshot. From now on, this worktree's
+gitignored content is **isolated** — edits here do NOT affect the source or
+any other worktree.
+
+If you change a gitignored file (e.g. add a new env var to \`.env\`, edit a
+local scratch doc, regenerate \`node_modules\` after a dep bump), the change
+will **NOT** flow back to \`${opts.repoPath}\` when this session ends — and
+because it's gitignored, it won't be in the WIP commit either. Surface this
+to the user explicitly when it happens, and offer to copy the changed file
+back into \`${opts.repoPath}\`.
+
 ## Working in this worktree
 
 - The whole \`./.minionhq/\` directory is git-ignored — write freely.
